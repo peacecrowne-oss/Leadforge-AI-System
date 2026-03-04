@@ -1,0 +1,101 @@
+############################################
+# LeadForge AI System (FastAPI + Vite React)
+# Repo root .gitignore
+############################################
+
+# --------------------
+# OS / Editor
+# --------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --------------------
+# Python (Backend)
+# --------------------
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+backend/venv/
+backend/.venv/
+
+# Environment variables / secrets
+.env
+.env.*
+backend/.env
+backend/.env.*
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+coverage.xml
+htmlcov/
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Logs
+*.log
+
+# SQLite databases (runtime artifact; docs like API_CONTRACT.md are NOT excluded)
+backend/leadforge.db
+backend/*.db
+backend/*.db-journal
+backend/*.db-wal
+backend/*.db-shm
+
+# --------------------
+# Node / Vite (Frontend)
+# --------------------
+node_modules/
+frontend/node_modules/
+
+# Build outputs
+dist/
+frontend/dist/
+
+# Vite / tooling cache
+.vite/
+frontend/.vite/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Frontend env files (keep .env.example tracked instead)
+frontend/.env
+frontend/.env.*
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# --------------------
+# Misc / Repo-specific
+# --------------------
+# If a stray executable/file named "uvicorn" appears at repo root, ignore it
+/uvicorn
+
+# Optional: ignore local PowerShell/command history artifacts if any appear
+*.stackdump

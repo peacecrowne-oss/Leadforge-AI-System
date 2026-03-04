@@ -19,6 +19,8 @@ layer free of any dependency on main.py and avoids circular imports.
 """
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 import sqlite3
@@ -64,7 +66,7 @@ def db_init() -> None:
             if "job_id" in cols and "id" not in cols:
                 conn.execute("ALTER TABLE leads RENAME TO job_leads")
 
-        # ── jobs (unchanged) ─────────────────────────────────────────────
+        # ── jobs ─────────────────────────────────────────────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
                 job_id        TEXT PRIMARY KEY,
@@ -73,9 +75,15 @@ def db_init() -> None:
                 updated_at    TEXT NOT NULL,
                 request_json  TEXT NOT NULL,
                 results_count INTEGER NOT NULL DEFAULT 0,
-                error         TEXT
+                error         TEXT,
+                user_id       TEXT
             )
         """)
+        # Safe migration: add user_id to pre-T13 DBs (legacy rows → NULL).
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
         # ── job_leads (old schema, preserved for existing job data) ──────
         conn.execute("""
@@ -93,14 +101,31 @@ def db_init() -> None:
             )
         """)
 
-        # ── users ────────────────────────────────────────────────────────
+        # ── users (schema validation + dev-safe rename) ───────────────────
+        # Required columns for the auth-capable users table.  If the table
+        # exists but any column is missing (any intermediate schema from
+        # earlier dev iterations), rename it to users_legacy_<timestamp> so
+        # the CREATE TABLE IF NOT EXISTS below can build a clean table.
+        # The legacy table is kept for manual inspection; no other tables
+        # (jobs, leads, campaigns) are touched.
+        _USERS_REQUIRED = {"user_id", "email", "hashed_password", "role", "created_at"}
+        _u = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone()
+        if _u is not None:
+            _ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if not _USERS_REQUIRED.issubset(_ucols):
+                # Schema is incomplete — rename for dev safety and recreate.
+                _legacy_name = "users_legacy_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+                conn.execute(f"ALTER TABLE users RENAME TO {_legacy_name}")
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id          TEXT PRIMARY KEY,
-                email       TEXT NOT NULL UNIQUE,
-                full_name   TEXT,
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL
+                user_id         TEXT PRIMARY KEY,
+                email           TEXT NOT NULL UNIQUE,
+                hashed_password TEXT NOT NULL,
+                role            TEXT NOT NULL DEFAULT 'user',
+                created_at      TEXT NOT NULL
             )
         """)
 
@@ -111,7 +136,7 @@ def db_init() -> None:
                 name               TEXT NOT NULL,
                 status             TEXT NOT NULL DEFAULT 'draft'
                                        CHECK (status IN ('draft','active','paused','completed','archived')),
-                created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+                created_by_user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
                 settings_json      TEXT,
                 created_at         TEXT NOT NULL,
                 updated_at         TEXT NOT NULL
@@ -123,7 +148,7 @@ def db_init() -> None:
             CREATE TABLE IF NOT EXISTS leads (
                 id            TEXT PRIMARY KEY,
                 campaign_id   TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-                owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+                owner_user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
                 status        TEXT NOT NULL DEFAULT 'new'
                                   CHECK (status IN ('new','contacted','qualified','disqualified','won','lost')),
                 first_name    TEXT,
@@ -163,17 +188,27 @@ def db_init() -> None:
         )
 
 
-def db_save_job(job: SearchJob) -> None:
-    """Insert or replace a job row.
+def db_save_job(job: SearchJob, user_id: str | None = None) -> None:
+    """Upsert a job row, preserving user_id on status updates.
+
+    On INSERT (new job_id): writes all columns including user_id.
+    On CONFLICT (existing job_id, e.g. background task status update):
+      updates only the mutable fields — user_id is intentionally excluded
+      from DO UPDATE SET so ownership is never overwritten.
 
     Accesses model attributes only — SearchJob is not imported at runtime.
     """
     with db_connect() as conn:
         conn.execute(
             """
-            INSERT OR REPLACE INTO jobs
-                (job_id, status, created_at, updated_at, request_json, results_count, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs
+                (job_id, status, created_at, updated_at, request_json, results_count, error, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                status        = excluded.status,
+                updated_at    = excluded.updated_at,
+                results_count = excluded.results_count,
+                error         = excluded.error
             """,
             (
                 job.job_id,
@@ -183,8 +218,25 @@ def db_save_job(job: SearchJob) -> None:
                 job.request.model_dump_json(),
                 job.results_count,
                 job.error,
+                user_id,
             ),
         )
+
+
+def db_get_job(job_id: str, user_id: str) -> dict | None:
+    """Load a job row only if owned by user_id, or if user_id is NULL (legacy).
+
+    Returns None for both "not found" and "wrong owner" so the route layer
+    cannot distinguish the two — both surface as HTTP 404.
+    """
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE job_id = ? AND (user_id = ? OR user_id IS NULL)",
+            (job_id, user_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
 
 
 def db_load_job(job_id: str) -> dict | None:
@@ -250,3 +302,61 @@ def db_load_results(job_id: str) -> list[dict]:
         }
         for row in rows
     ]
+
+
+# ── User functions ────────────────────────────────────────────────────────────
+
+def db_create_user(
+    email: str,
+    hashed_password: str,
+    role: str = "user",
+) -> dict:
+    """Insert a new user row and return a public dict (no hashed_password).
+
+    Normalizes email to lowercase + stripped before storage.
+    Generates a UUID for user_id and an ISO-8601 UTC timestamp for
+    created_at.  Raises sqlite3.IntegrityError if email already exists.
+    """
+    email = email.strip().lower()
+    user_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    with db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (user_id, email, hashed_password, role, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, email, hashed_password, role, created_at),
+        )
+    return {
+        "user_id": user_id,
+        "email": email,
+        "role": role,
+        "created_at": created_at,
+    }
+
+
+def db_get_user_by_email(email: str) -> dict | None:
+    """Return the user row for *email*, including hashed_password.
+
+    Normalizes email before lookup. Returns None if no matching user exists.
+    """
+    email = email.strip().lower()
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email = ?", (email,)
+        ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def db_get_user_by_id(user_id: str) -> dict | None:
+    """Return the user row for *user_id*, or None if not found."""
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
