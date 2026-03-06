@@ -93,3 +93,16 @@ class CampaignLeadDetail(BaseModel):
     email: str | None = None
     linkedin_url: str | None = None
     score: float | None = None
+
+
+class CampaignStatsResponse(BaseModel):
+    """Returned by POST /campaigns/{id}/run and GET /campaigns/{id}/stats."""
+    campaign_id: str
+    execution_status: str
+    total_leads: int
+    processed_leads: int
+    sent_count: int
+    opened_count: int
+    replied_count: int
+    failed_count: int
+    last_run_at: str | None

@@ -555,3 +555,127 @@ def db_remove_lead_from_campaign(
     finally:
         conn.close()
     return deleted
+
+
+# ── Campaign execution functions ──────────────────────────────────────────────
+
+def _compute_stats(total_leads: int) -> dict:
+    """Deterministic engagement metrics for a given lead count.
+
+    Uses integer arithmetic so results are stable for the same N:
+      - sent      = total_leads
+      - opened    = floor(sent   * 3 / 5)   ~60%
+      - replied   = floor(opened * 3 / 10)  ~30% of opens
+      - failed    = 0
+    """
+    sent = total_leads
+    opened = (sent * 3) // 5
+    replied = (opened * 3) // 10
+    return {
+        "total_leads": total_leads,
+        "processed_leads": total_leads,
+        "sent_count": sent,
+        "opened_count": opened,
+        "replied_count": replied,
+        "failed_count": 0,
+    }
+
+
+def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
+    """Execute a campaign and persist stats.
+
+    Returns None if the campaign is not found or not owned by user_id.
+    Raises ValueError if the campaign has no assigned leads.
+    Returns the stats dict on success.
+    """
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            if cur.fetchone() is None:
+                return None
+
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM campaign_leads WHERE campaign_id = %s",
+                (campaign_id,),
+            )
+            lead_count = cur.fetchone()["n"]
+            if lead_count == 0:
+                raise ValueError("Campaign has no assigned leads")
+
+            metrics = _compute_stats(lead_count)
+            now = datetime.now(timezone.utc).isoformat()
+
+            cur.execute(
+                """
+                INSERT INTO campaign_stats (
+                    campaign_id, execution_status, total_leads, processed_leads,
+                    sent_count, opened_count, replied_count, failed_count, last_run_at
+                ) VALUES (%s, 'completed', %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (campaign_id) DO UPDATE SET
+                    execution_status = 'completed',
+                    total_leads      = EXCLUDED.total_leads,
+                    processed_leads  = EXCLUDED.processed_leads,
+                    sent_count       = EXCLUDED.sent_count,
+                    opened_count     = EXCLUDED.opened_count,
+                    replied_count    = EXCLUDED.replied_count,
+                    failed_count     = EXCLUDED.failed_count,
+                    last_run_at      = EXCLUDED.last_run_at
+                """,
+                (
+                    campaign_id,
+                    metrics["total_leads"], metrics["processed_leads"],
+                    metrics["sent_count"], metrics["opened_count"],
+                    metrics["replied_count"], metrics["failed_count"],
+                    now,
+                ),
+            )
+            cur.execute(
+                "UPDATE campaigns SET status = 'active', updated_at = %s "
+                "WHERE id = %s AND status = 'draft'",
+                (now, campaign_id),
+            )
+        conn.commit()
+    except ValueError:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "campaign_id": campaign_id,
+        "execution_status": "completed",
+        **metrics,
+        "last_run_at": now,
+    }
+
+
+def db_get_campaign_stats(campaign_id: str, user_id: str) -> dict | None:
+    """Return the latest stats for a campaign owned by user_id.
+
+    Returns None if the campaign is not found, not owned, or has never been run.
+    """
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            if cur.fetchone() is None:
+                return None
+
+            cur.execute(
+                "SELECT * FROM campaign_stats WHERE campaign_id = %s",
+                (campaign_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None

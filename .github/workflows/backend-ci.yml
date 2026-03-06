@@ -71,3 +71,6 @@ jobs:
 
       - name: API — campaign lead assignment + isolation
         run: python scripts/tests/test_campaign_lead_assignment.py --base-url http://127.0.0.1:8000
+
+      - name: API — campaign execution engine
+        run: python scripts/tests/test_campaign_execution.py --base-url http://127.0.0.1:8000

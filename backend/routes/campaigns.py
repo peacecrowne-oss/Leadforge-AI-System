@@ -24,9 +24,11 @@ from db import (
     db_create_campaign,
     db_delete_campaign,
     db_get_campaign,
+    db_get_campaign_stats,
     db_list_campaign_leads,
     db_list_campaigns,
     db_remove_lead_from_campaign,
+    db_run_campaign,
     db_update_campaign,
 )
 from models import (
@@ -35,6 +37,7 @@ from models import (
     CampaignLeadAssignment,
     CampaignLeadDetail,
     CampaignResponse,
+    CampaignStatsResponse,
     CampaignUpdate,
 )
 
@@ -125,3 +128,24 @@ def remove_lead_from_campaign(
     removed = db_remove_lead_from_campaign(campaign_id, lead_id, user["user_id"])
     if not removed:
         raise HTTPException(status_code=404, detail="Assignment not found")
+
+
+# ── Execution routes ──────────────────────────────────────────────────────────
+
+@router.post("/{campaign_id}/run", response_model=CampaignStatsResponse)
+def run_campaign(campaign_id: str, user: dict = Depends(get_current_user)):
+    try:
+        result = db_run_campaign(campaign_id, user["user_id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return result
+
+
+@router.get("/{campaign_id}/stats", response_model=CampaignStatsResponse)
+def get_campaign_stats(campaign_id: str, user: dict = Depends(get_current_user)):
+    stats = db_get_campaign_stats(campaign_id, user["user_id"])
+    if stats is None:
+        raise HTTPException(status_code=404, detail="No stats found for this campaign")
+    return stats

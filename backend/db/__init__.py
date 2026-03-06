@@ -32,6 +32,8 @@ if _url.startswith(("postgres://", "postgresql://")):
         db_add_lead_to_campaign,
         db_list_campaign_leads,
         db_remove_lead_from_campaign,
+        db_run_campaign,
+        db_get_campaign_stats,
     )
     _BACKEND = "postgres"
 else:
@@ -54,5 +56,7 @@ else:
         db_add_lead_to_campaign,
         db_list_campaign_leads,
         db_remove_lead_from_campaign,
+        db_run_campaign,
+        db_get_campaign_stats,
     )
     _BACKEND = "sqlite"

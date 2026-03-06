@@ -480,3 +480,111 @@ def db_remove_lead_from_campaign(
             (campaign_id, lead_id),
         )
     return cursor.rowcount > 0
+
+
+# ── Campaign execution functions ──────────────────────────────────────────────
+
+def _compute_stats(total_leads: int) -> dict:
+    """Deterministic engagement metrics for a given lead count.
+
+    Uses integer arithmetic so results are stable for the same N:
+      - sent      = total_leads
+      - opened    = floor(sent   * 3 / 5)   ~60%
+      - replied   = floor(opened * 3 / 10)  ~30% of opens
+      - failed    = 0
+    """
+    sent = total_leads
+    opened = (sent * 3) // 5
+    replied = (opened * 3) // 10
+    return {
+        "total_leads": total_leads,
+        "processed_leads": total_leads,
+        "sent_count": sent,
+        "opened_count": opened,
+        "replied_count": replied,
+        "failed_count": 0,
+    }
+
+
+def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
+    """Execute a campaign and persist stats.
+
+    Returns None if the campaign is not found or not owned by user_id.
+    Raises ValueError if the campaign has no assigned leads.
+    Returns the stats dict on success.
+    """
+    with db_connect() as conn:
+        camp = conn.execute(
+            "SELECT id FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        ).fetchone()
+        if camp is None:
+            return None
+
+        lead_count = conn.execute(
+            "SELECT COUNT(*) FROM campaign_leads WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchone()[0]
+        if lead_count == 0:
+            raise ValueError("Campaign has no assigned leads")
+
+        metrics = _compute_stats(lead_count)
+        now = datetime.now(timezone.utc).isoformat()
+
+        conn.execute(
+            """
+            INSERT INTO campaign_stats (
+                campaign_id, execution_status, total_leads, processed_leads,
+                sent_count, opened_count, replied_count, failed_count, last_run_at
+            ) VALUES (?, 'completed', ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(campaign_id) DO UPDATE SET
+                execution_status = 'completed',
+                total_leads      = excluded.total_leads,
+                processed_leads  = excluded.processed_leads,
+                sent_count       = excluded.sent_count,
+                opened_count     = excluded.opened_count,
+                replied_count    = excluded.replied_count,
+                failed_count     = excluded.failed_count,
+                last_run_at      = excluded.last_run_at
+            """,
+            (
+                campaign_id,
+                metrics["total_leads"], metrics["processed_leads"],
+                metrics["sent_count"], metrics["opened_count"],
+                metrics["replied_count"], metrics["failed_count"],
+                now,
+            ),
+        )
+        # Advance campaign status from draft → active on first run
+        conn.execute(
+            "UPDATE campaigns SET status = 'active', updated_at = ? "
+            "WHERE id = ? AND status = 'draft'",
+            (now, campaign_id),
+        )
+
+    return {
+        "campaign_id": campaign_id,
+        "execution_status": "completed",
+        **metrics,
+        "last_run_at": now,
+    }
+
+
+def db_get_campaign_stats(campaign_id: str, user_id: str) -> dict | None:
+    """Return the latest stats for a campaign owned by user_id.
+
+    Returns None if the campaign is not found, not owned, or has never been run.
+    """
+    with db_connect() as conn:
+        camp = conn.execute(
+            "SELECT id FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        ).fetchone()
+        if camp is None:
+            return None
+
+        row = conn.execute(
+            "SELECT * FROM campaign_stats WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchone()
+    return dict(row) if row else None
