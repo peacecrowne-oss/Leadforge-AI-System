@@ -8,7 +8,7 @@ from core.errors import (
     validation_exception_handler,
 )
 from core.logging import LoggingMiddleware, configure_logging
-from db.sqlite import db_init
+from db import db_init
 from routes.auth import router as auth_router
 from routes.leads import router
 from routes.system import router as system_router

@@ -9,3 +9,13 @@ services:
       - APP_ENV=dev
       - JWT_SECRET=dev-insecure-secret-change-me
     restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: leadforge
+      POSTGRES_PASSWORD: leadforge
+      POSTGRES_DB: leadforge
+    ports:
+      - "5432:5432"
+    restart: unless-stopped

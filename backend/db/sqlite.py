@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 import sqlite3
 
+from db.migrations.runner import run_migrations
+
 if TYPE_CHECKING:
     # Used by type checkers / IDEs only — never executed at runtime.
     from models import Lead, SearchJob  # noqa: F401
@@ -47,17 +49,21 @@ def db_connect() -> sqlite3.Connection:
 
 
 def db_init() -> None:
-    """Ensure all tables exist, migrating old job-leads schema if necessary.
+    """Initialize the database by running all pending SQL migrations.
 
-    Migration strategy (idempotent):
+    Pre-migration steps (idempotent, data-safe):
       - If a 'leads' table with the old job-leads schema exists (has 'job_id'
-        column, lacks an 'id' PK column), rename it to 'job_leads' to
-        preserve all existing data.
-      - Then create job_leads, users, campaigns, and the new M1 leads table
-        (all with IF NOT EXISTS — safe to re-run).
+        column, lacks an 'id' PK), rename it to 'job_leads' before migrations
+        run so the new 'leads' table can be created cleanly.
+      - If the 'users' table exists but is missing required columns (earlier
+        dev schema), rename it to 'users_legacy_<ts>' so migrations can
+        build the correct table.
+    Post-migration step:
+      - ALTER TABLE jobs ADD COLUMN user_id as a no-op-safe fallback for
+        existing DBs where jobs was created before the column was added.
     """
     with db_connect() as conn:
-        # ── Safe migration: rename old job-leads 'leads' table if present ──
+        # ── Pre-migration: rename legacy 'leads' table if present ─────────
         _old = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='leads'"
         ).fetchone()
@@ -65,49 +71,9 @@ def db_init() -> None:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(leads)").fetchall()}
             if "job_id" in cols and "id" not in cols:
                 conn.execute("ALTER TABLE leads RENAME TO job_leads")
+                conn.commit()
 
-        # ── jobs ─────────────────────────────────────────────────────────
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
-                job_id        TEXT PRIMARY KEY,
-                status        TEXT NOT NULL,
-                created_at    TEXT NOT NULL,
-                updated_at    TEXT NOT NULL,
-                request_json  TEXT NOT NULL,
-                results_count INTEGER NOT NULL DEFAULT 0,
-                error         TEXT,
-                user_id       TEXT
-            )
-        """)
-        # Safe migration: add user_id to pre-T13 DBs (legacy rows → NULL).
-        try:
-            conn.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-
-        # ── job_leads (old schema, preserved for existing job data) ──────
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS job_leads (
-                job_id        TEXT NOT NULL,
-                lead_id       TEXT NOT NULL,
-                full_name     TEXT NOT NULL,
-                title         TEXT,
-                company       TEXT,
-                location      TEXT,
-                email         TEXT,
-                linkedin_url  TEXT,
-                score         REAL,
-                PRIMARY KEY (job_id, lead_id)
-            )
-        """)
-
-        # ── users (schema validation + dev-safe rename) ───────────────────
-        # Required columns for the auth-capable users table.  If the table
-        # exists but any column is missing (any intermediate schema from
-        # earlier dev iterations), rename it to users_legacy_<timestamp> so
-        # the CREATE TABLE IF NOT EXISTS below can build a clean table.
-        # The legacy table is kept for manual inspection; no other tables
-        # (jobs, leads, campaigns) are touched.
+        # ── Pre-migration: rename incomplete 'users' table if present ─────
         _USERS_REQUIRED = {"user_id", "email", "hashed_password", "role", "created_at"}
         _u = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
@@ -115,77 +81,19 @@ def db_init() -> None:
         if _u is not None:
             _ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
             if not _USERS_REQUIRED.issubset(_ucols):
-                # Schema is incomplete — rename for dev safety and recreate.
                 _legacy_name = "users_legacy_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
                 conn.execute(f"ALTER TABLE users RENAME TO {_legacy_name}")
+                conn.commit()
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id         TEXT PRIMARY KEY,
-                email           TEXT NOT NULL UNIQUE,
-                hashed_password TEXT NOT NULL,
-                role            TEXT NOT NULL DEFAULT 'user',
-                created_at      TEXT NOT NULL
-            )
-        """)
+        # ── Apply SQL migrations ──────────────────────────────────────────
+        run_migrations(conn)
 
-        # ── campaigns ────────────────────────────────────────────────────
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS campaigns (
-                id                 TEXT PRIMARY KEY,
-                name               TEXT NOT NULL,
-                status             TEXT NOT NULL DEFAULT 'draft'
-                                       CHECK (status IN ('draft','active','paused','completed','archived')),
-                created_by_user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
-                settings_json      TEXT,
-                created_at         TEXT NOT NULL,
-                updated_at         TEXT NOT NULL
-            )
-        """)
-
-        # ── leads (M1) ───────────────────────────────────────────────────
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS leads (
-                id            TEXT PRIMARY KEY,
-                campaign_id   TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-                owner_user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
-                status        TEXT NOT NULL DEFAULT 'new'
-                                  CHECK (status IN ('new','contacted','qualified','disqualified','won','lost')),
-                first_name    TEXT,
-                last_name     TEXT,
-                company       TEXT,
-                email         TEXT,
-                phone         TEXT,
-                linkedin_url  TEXT,
-                website_url   TEXT,
-                notes         TEXT,
-                meta_json     TEXT,
-                created_at    TEXT NOT NULL,
-                updated_at    TEXT NOT NULL
-            )
-        """)
-
-        # ── indexes ──────────────────────────────────────────────────────
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS campaigns_created_by_user_id_idx "
-            "ON campaigns(created_by_user_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS leads_campaign_id_idx "
-            "ON leads(campaign_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS leads_owner_user_id_idx "
-            "ON leads(owner_user_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS leads_email_idx "
-            "ON leads(email)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS leads_campaign_email_uniq "
-            "ON leads(campaign_id, email) WHERE email IS NOT NULL"
-        )
+        # ── Post-migration: add user_id to pre-T13 existing jobs tables ───
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def db_save_job(job: SearchJob, user_id: str | None = None) -> None:
