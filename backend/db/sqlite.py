@@ -268,3 +268,98 @@ def db_get_user_by_id(user_id: str) -> dict | None:
     if row is None:
         return None
     return dict(row)
+
+
+# ── Campaign functions ────────────────────────────────────────────────────────
+
+def _campaign_row(row) -> dict:
+    """Convert a DB row to a public campaign dict (renames created_by_user_id → user_id)."""
+    d = dict(row)
+    d["user_id"] = d.pop("created_by_user_id", None)
+    return d
+
+
+def db_create_campaign(
+    user_id: str,
+    name: str,
+    description: str | None = None,
+    status: str = "draft",
+    settings_json: str | None = None,
+) -> dict:
+    """Insert a new campaign row and return a public dict."""
+    campaign_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    with db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO campaigns
+                (id, name, description, status, created_by_user_id,
+                 settings_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (campaign_id, name, description, status, user_id,
+             settings_json, now, now),
+        )
+    return {
+        "id": campaign_id,
+        "name": name,
+        "description": description,
+        "status": status,
+        "user_id": user_id,
+        "settings_json": settings_json,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def db_list_campaigns(user_id: str) -> list[dict]:
+    """Return all campaigns owned by user_id, newest first."""
+    with db_connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM campaigns WHERE created_by_user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_campaign_row(row) for row in rows]
+
+
+def db_get_campaign(campaign_id: str, user_id: str) -> dict | None:
+    """Return the campaign only if owned by user_id; None for not-found or wrong owner."""
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        ).fetchone()
+    return _campaign_row(row) if row else None
+
+
+def db_update_campaign(campaign_id: str, user_id: str, **fields) -> dict | None:
+    """Update allowed fields on a campaign; return the updated row or None if not found/owned."""
+    allowed = {"name", "description", "status", "settings_json"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return db_get_campaign(campaign_id, user_id)
+
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [campaign_id, user_id]
+
+    with db_connect() as conn:
+        conn.execute(
+            f"UPDATE campaigns SET {set_clause} WHERE id = ? AND created_by_user_id = ?",
+            values,
+        )
+        row = conn.execute(
+            "SELECT * FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        ).fetchone()
+    return _campaign_row(row) if row else None
+
+
+def db_delete_campaign(campaign_id: str, user_id: str) -> bool:
+    """Delete a campaign owned by user_id; return True if a row was deleted."""
+    with db_connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        )
+    return cursor.rowcount > 0

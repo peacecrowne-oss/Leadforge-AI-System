@@ -298,3 +298,125 @@ def db_get_user_by_id(user_id: str) -> dict | None:
     finally:
         conn.close()
     return dict(row) if row else None
+
+
+# ── Campaign functions ────────────────────────────────────────────────────────
+
+def _campaign_row(row: dict) -> dict:
+    """Rename created_by_user_id → user_id in a Postgres RealDictRow."""
+    d = dict(row)
+    d["user_id"] = d.pop("created_by_user_id", None)
+    return d
+
+
+def db_create_campaign(
+    user_id: str,
+    name: str,
+    description: str | None = None,
+    status: str = "draft",
+    settings_json: str | None = None,
+) -> dict:
+    """Insert a new campaign row and return a public dict."""
+    campaign_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO campaigns
+                    (id, name, description, status, created_by_user_id,
+                     settings_json, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (campaign_id, name, description, status, user_id,
+                 settings_json, now, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {
+        "id": campaign_id,
+        "name": name,
+        "description": description,
+        "status": status,
+        "user_id": user_id,
+        "settings_json": settings_json,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def db_list_campaigns(user_id: str) -> list[dict]:
+    """Return all campaigns owned by user_id, newest first."""
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM campaigns WHERE created_by_user_id = %s ORDER BY created_at DESC",
+                (user_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [_campaign_row(row) for row in rows]
+
+
+def db_get_campaign(campaign_id: str, user_id: str) -> dict | None:
+    """Return the campaign only if owned by user_id; None for not-found or wrong owner."""
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    return _campaign_row(row) if row else None
+
+
+def db_update_campaign(campaign_id: str, user_id: str, **fields) -> dict | None:
+    """Update allowed fields on a campaign; return the updated row or None if not found/owned."""
+    allowed = {"name", "description", "status", "settings_json"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return db_get_campaign(campaign_id, user_id)
+
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    set_clause = ", ".join(f"{k} = %s" for k in updates)
+    values = list(updates.values()) + [campaign_id, user_id]
+
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE campaigns SET {set_clause} WHERE id = %s AND created_by_user_id = %s",
+                values,
+            )
+            cur.execute(
+                "SELECT * FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return _campaign_row(row) if row else None
+
+
+def db_delete_campaign(campaign_id: str, user_id: str) -> bool:
+    """Delete a campaign owned by user_id; return True if a row was deleted."""
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            deleted = cur.rowcount > 0
+        conn.commit()
+    finally:
+        conn.close()
+    return deleted

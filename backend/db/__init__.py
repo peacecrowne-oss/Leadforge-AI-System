@@ -24,6 +24,11 @@ if _url.startswith(("postgres://", "postgresql://")):
         db_create_user,
         db_get_user_by_email,
         db_get_user_by_id,
+        db_create_campaign,
+        db_list_campaigns,
+        db_get_campaign,
+        db_update_campaign,
+        db_delete_campaign,
     )
     _BACKEND = "postgres"
 else:
@@ -38,5 +43,10 @@ else:
         db_create_user,
         db_get_user_by_email,
         db_get_user_by_id,
+        db_create_campaign,
+        db_list_campaigns,
+        db_get_campaign,
+        db_update_campaign,
+        db_delete_campaign,
     )
     _BACKEND = "sqlite"

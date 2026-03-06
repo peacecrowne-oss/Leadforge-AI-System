@@ -35,3 +35,31 @@ class SearchJob(BaseModel):
     request: LeadSearchRequest
     results_count: int = 0
     error: str | None = None
+
+
+CampaignStatus = Literal["draft", "active", "paused", "completed", "archived"]
+
+
+class CampaignCreate(BaseModel):
+    name: str
+    description: str | None = None
+    status: CampaignStatus = "draft"
+    settings_json: str | None = None
+
+
+class CampaignUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: CampaignStatus | None = None
+    settings_json: str | None = None
+
+
+class CampaignResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    status: str
+    user_id: str
+    settings_json: str | None = None
+    created_at: str
+    updated_at: str

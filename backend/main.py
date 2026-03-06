@@ -10,6 +10,7 @@ from core.errors import (
 from core.logging import LoggingMiddleware, configure_logging
 from db import db_init
 from routes.auth import router as auth_router
+from routes.campaigns import router as campaigns_router
 from routes.leads import router
 from routes.system import router as system_router
 
@@ -47,3 +48,4 @@ db_init()
 app.include_router(system_router)
 app.include_router(auth_router)
 app.include_router(router)
+app.include_router(campaigns_router)
