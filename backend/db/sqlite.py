@@ -363,3 +363,120 @@ def db_delete_campaign(campaign_id: str, user_id: str) -> bool:
             (campaign_id, user_id),
         )
     return cursor.rowcount > 0
+
+
+# ── Campaign lead assignment functions ───────────────────────────────────────
+
+def db_add_lead_to_campaign(
+    campaign_id: str, job_id: str, lead_id: str, user_id: str
+) -> dict:
+    """Assign a job-search lead to a campaign.
+
+    Verifies:
+      - User owns the campaign.
+      - Lead exists in a job owned by the user (or job has no owner).
+
+    Raises ValueError if either check fails.
+    Raises sqlite3.IntegrityError on duplicate (campaign_id, lead_id).
+    """
+    assignment_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    with db_connect() as conn:
+        camp = conn.execute(
+            "SELECT id FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        ).fetchone()
+        if camp is None:
+            raise ValueError("Campaign not found")
+
+        lead = conn.execute(
+            """
+            SELECT jl.lead_id FROM job_leads jl
+            JOIN jobs j ON j.job_id = jl.job_id
+            WHERE jl.job_id = ? AND jl.lead_id = ?
+              AND (j.user_id = ? OR j.user_id IS NULL)
+            """,
+            (job_id, lead_id, user_id),
+        ).fetchone()
+        if lead is None:
+            raise ValueError("Lead not found or not accessible")
+
+        conn.execute(
+            """
+            INSERT INTO campaign_leads (id, campaign_id, job_id, lead_id, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (assignment_id, campaign_id, job_id, lead_id, now),
+        )
+
+    return {
+        "id": assignment_id,
+        "campaign_id": campaign_id,
+        "job_id": job_id,
+        "lead_id": lead_id,
+        "created_at": now,
+    }
+
+
+def db_list_campaign_leads(campaign_id: str, user_id: str) -> list[dict] | None:
+    """Return all leads assigned to a campaign owned by user_id.
+
+    Returns None if the campaign is not found or not owned by user_id
+    (signals 404 to the route layer).  Returns [] if found but empty.
+    """
+    with db_connect() as conn:
+        camp = conn.execute(
+            "SELECT id FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        ).fetchone()
+        if camp is None:
+            return None
+
+        rows = conn.execute(
+            """
+            SELECT cl.id          AS assignment_id,
+                   cl.campaign_id,
+                   cl.job_id,
+                   cl.lead_id,
+                   cl.created_at  AS assigned_at,
+                   jl.full_name,
+                   jl.title,
+                   jl.company,
+                   jl.location,
+                   jl.email,
+                   jl.linkedin_url,
+                   jl.score
+            FROM campaign_leads cl
+            JOIN job_leads jl
+              ON jl.job_id = cl.job_id AND jl.lead_id = cl.lead_id
+            WHERE cl.campaign_id = ?
+            ORDER BY cl.created_at DESC
+            """,
+            (campaign_id,),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def db_remove_lead_from_campaign(
+    campaign_id: str, lead_id: str, user_id: str
+) -> bool:
+    """Remove a lead assignment from a campaign owned by user_id.
+
+    Returns True if a row was deleted, False if the campaign is not owned
+    by the user or the assignment does not exist (both surface as 404).
+    """
+    with db_connect() as conn:
+        camp = conn.execute(
+            "SELECT id FROM campaigns WHERE id = ? AND created_by_user_id = ?",
+            (campaign_id, user_id),
+        ).fetchone()
+        if camp is None:
+            return False
+
+        cursor = conn.execute(
+            "DELETE FROM campaign_leads WHERE campaign_id = ? AND lead_id = ?",
+            (campaign_id, lead_id),
+        )
+    return cursor.rowcount > 0

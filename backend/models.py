@@ -63,3 +63,33 @@ class CampaignResponse(BaseModel):
     settings_json: str | None = None
     created_at: str
     updated_at: str
+
+
+class CampaignLeadAdd(BaseModel):
+    job_id: str
+    lead_id: str
+
+
+class CampaignLeadAssignment(BaseModel):
+    """Returned when a lead is successfully assigned to a campaign."""
+    id: str
+    campaign_id: str
+    job_id: str
+    lead_id: str
+    created_at: str
+
+
+class CampaignLeadDetail(BaseModel):
+    """Lead data enriched with campaign assignment metadata."""
+    assignment_id: str
+    campaign_id: str
+    job_id: str
+    lead_id: str
+    assigned_at: str
+    full_name: str
+    title: str | None = None
+    company: str | None = None
+    location: str | None = None
+    email: str | None = None
+    linkedin_url: str | None = None
+    score: float | None = None

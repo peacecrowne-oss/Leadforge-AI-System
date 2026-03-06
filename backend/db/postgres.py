@@ -420,3 +420,138 @@ def db_delete_campaign(campaign_id: str, user_id: str) -> bool:
     finally:
         conn.close()
     return deleted
+
+
+# ── Campaign lead assignment functions ───────────────────────────────────────
+
+def db_add_lead_to_campaign(
+    campaign_id: str, job_id: str, lead_id: str, user_id: str
+) -> dict:
+    """Assign a job-search lead to a campaign.
+
+    Raises ValueError if campaign not found or lead not accessible.
+    Raises sqlite3.IntegrityError on duplicate (campaign_id, lead_id).
+    """
+    assignment_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            if cur.fetchone() is None:
+                raise ValueError("Campaign not found")
+
+            cur.execute(
+                """
+                SELECT jl.lead_id FROM job_leads jl
+                JOIN jobs j ON j.job_id = jl.job_id
+                WHERE jl.job_id = %s AND jl.lead_id = %s
+                  AND (j.user_id = %s OR j.user_id IS NULL)
+                """,
+                (job_id, lead_id, user_id),
+            )
+            if cur.fetchone() is None:
+                raise ValueError("Lead not found or not accessible")
+
+            cur.execute(
+                """
+                INSERT INTO campaign_leads (id, campaign_id, job_id, lead_id, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (assignment_id, campaign_id, job_id, lead_id, now),
+            )
+        conn.commit()
+    except ValueError:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+            raise sqlite3.IntegrityError(str(exc)) from exc
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "id": assignment_id,
+        "campaign_id": campaign_id,
+        "job_id": job_id,
+        "lead_id": lead_id,
+        "created_at": now,
+    }
+
+
+def db_list_campaign_leads(campaign_id: str, user_id: str) -> list[dict] | None:
+    """Return all leads assigned to a campaign owned by user_id.
+
+    Returns None if campaign not found/not owned (→ 404). Returns [] if empty.
+    """
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            if cur.fetchone() is None:
+                return None
+
+            cur.execute(
+                """
+                SELECT cl.id          AS assignment_id,
+                       cl.campaign_id,
+                       cl.job_id,
+                       cl.lead_id,
+                       cl.created_at  AS assigned_at,
+                       jl.full_name,
+                       jl.title,
+                       jl.company,
+                       jl.location,
+                       jl.email,
+                       jl.linkedin_url,
+                       jl.score
+                FROM campaign_leads cl
+                JOIN job_leads jl
+                  ON jl.job_id = cl.job_id AND jl.lead_id = cl.lead_id
+                WHERE cl.campaign_id = %s
+                ORDER BY cl.created_at DESC
+                """,
+                (campaign_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return [dict(row) for row in rows]
+
+
+def db_remove_lead_from_campaign(
+    campaign_id: str, lead_id: str, user_id: str
+) -> bool:
+    """Remove a lead assignment from a campaign owned by user_id.
+
+    Returns True if deleted, False if campaign not owned or assignment missing.
+    """
+    conn = db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM campaigns WHERE id = %s AND created_by_user_id = %s",
+                (campaign_id, user_id),
+            )
+            if cur.fetchone() is None:
+                return False
+
+            cur.execute(
+                "DELETE FROM campaign_leads WHERE campaign_id = %s AND lead_id = %s",
+                (campaign_id, lead_id),
+            )
+            deleted = cur.rowcount > 0
+        conn.commit()
+    finally:
+        conn.close()
+    return deleted
