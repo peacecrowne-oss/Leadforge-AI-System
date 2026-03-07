@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { clearToken } from '../lib/api'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
@@ -7,6 +8,13 @@ const NAV_LINKS = [
 ]
 
 export default function Layout() {
+  const navigate = useNavigate()
+
+  function handleSignOut() {
+    clearToken()
+    navigate('/login')
+  }
+
   return (
     <div style={{ display: 'flex', minHeight: '100vh', fontFamily: 'sans-serif' }}>
       <nav style={{
@@ -38,12 +46,15 @@ export default function Layout() {
           </NavLink>
         ))}
         <div style={{ marginTop: 'auto' }}>
-          <NavLink
-            to="/login"
-            style={{ color: '#ccc', textDecoration: 'none', fontSize: '0.9rem' }}
+          <button
+            onClick={handleSignOut}
+            style={{
+              background: 'none', border: 'none', color: '#ccc',
+              cursor: 'pointer', fontSize: '0.9rem', padding: '0.4rem 0.6rem',
+            }}
           >
-            Login
-          </NavLink>
+            Sign out
+          </button>
         </div>
       </nav>
 
