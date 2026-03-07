@@ -1,7 +1,15 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Fragment } from 'react'
 import { apiPost, apiGet } from '../lib/api'
 
 const POLL_MS = 1500
+
+const FACTOR_LABELS = {
+  seniority_match: 'Seniority',
+  title_match:     'Title',
+  keyword_match:   'Keywords',
+  location_match:  'Location',
+  company_match:   'Company',
+}
 
 export default function Leads() {
   const [form, setForm] = useState({ keywords: '', location: '', company: '', limit: '5' })
@@ -10,7 +18,8 @@ export default function Leads() {
   const [leads, setLeads] = useState([])
   const [error, setError] = useState(null)
   const [campaigns, setCampaigns] = useState([])
-  const [assign, setAssign] = useState({})     // { [lead_id]: { open, selected, status } }
+  const [assign, setAssign] = useState({})         // { [lead_id]: { open, selected, status } }
+  const [scoreExpanded, setScoreExpanded] = useState({}) // { [lead_id]: bool }
   const intervalRef = useRef(null)
 
   useEffect(() => {
@@ -20,6 +29,10 @@ export default function Leads() {
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }))
 
+  function toggleScore(leadId) {
+    setScoreExpanded(s => ({ ...s, [leadId]: !s[leadId] }))
+  }
+
   async function handleSearch(e) {
     e.preventDefault()
     clearInterval(intervalRef.current)
@@ -27,6 +40,7 @@ export default function Leads() {
     setError(null)
     setLeads([])
     setAssign({})
+    setScoreExpanded({})
     try {
       const body = { limit: Math.max(1, Number(form.limit)) }
       if (form.keywords) body.keywords = form.keywords
@@ -120,54 +134,99 @@ export default function Leads() {
             <tbody>
               {leads.map(lead => {
                 const a = assign[lead.id]
+                const expanded = !!scoreExpanded[lead.id]
                 return (
-                  <tr key={lead.id} style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={td}>{lead.full_name}</td>
-                    <td style={td}>{lead.title || '—'}</td>
-                    <td style={td}>{lead.company || '—'}</td>
-                    <td style={td}>{lead.location || '—'}</td>
-                    <td style={td}>{lead.score != null ? lead.score.toFixed(2) : '—'}</td>
-                    <td style={td}>
-                      {!a?.open ? (
+                  <Fragment key={lead.id}>
+                    <tr style={{ borderBottom: expanded ? 'none' : '1px solid #eee' }}>
+                      <td style={td}>{lead.full_name}</td>
+                      <td style={td}>{lead.title || '—'}</td>
+                      <td style={td}>{lead.company || '—'}</td>
+                      <td style={td}>{lead.location || '—'}</td>
+                      <td style={td}>
                         <button
-                          onClick={() => openAssign(lead.id)}
-                          disabled={campaigns.length === 0}
-                          style={smallBtn}
-                          title={campaigns.length === 0 ? 'Create a campaign first' : ''}
+                          onClick={() => toggleScore(lead.id)}
+                          style={scoreCellBtn}
+                          title={expanded ? 'Hide score details' : 'Show score details'}
                         >
-                          {campaigns.length === 0 ? 'No campaigns' : 'Add to Campaign'}
+                          {lead.score != null ? lead.score.toFixed(2) : '—'}
+                          <span style={{ marginLeft: '0.3rem', fontSize: '0.7rem', opacity: 0.7 }}>
+                            {expanded ? '▾' : '▸'}
+                          </span>
                         </button>
-                      ) : a.status === 'added' ? (
-                        <span style={{ color: '#2e7d32', fontSize: '0.85rem' }}>✓ Added</span>
-                      ) : (
-                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                          <select
-                            value={a.selected}
-                            onChange={e => setAssign(as => ({ ...as, [lead.id]: { ...as[lead.id], selected: e.target.value } }))}
-                            style={{ fontSize: '0.85rem', padding: '0.2rem 0.4rem', borderRadius: 4, border: '1px solid #ccc' }}
-                          >
-                            {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                          </select>
+                      </td>
+                      <td style={td}>
+                        {!a?.open ? (
                           <button
-                            onClick={() => confirmAssign(lead)}
-                            disabled={a.status === 'adding'}
+                            onClick={() => openAssign(lead.id)}
+                            disabled={campaigns.length === 0}
                             style={smallBtn}
+                            title={campaigns.length === 0 ? 'Create a campaign first' : ''}
                           >
-                            {a.status === 'adding' ? '…' : 'Add'}
+                            {campaigns.length === 0 ? 'No campaigns' : 'Add to Campaign'}
                           </button>
-                          {a.status === 'err' && (
-                            <span style={{ color: '#c62828', fontSize: '0.8rem' }}>{a.errMsg}</span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
+                        ) : a.status === 'added' ? (
+                          <span style={{ color: '#2e7d32', fontSize: '0.85rem' }}>✓ Added</span>
+                        ) : (
+                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select
+                              value={a.selected}
+                              onChange={e => setAssign(as => ({ ...as, [lead.id]: { ...as[lead.id], selected: e.target.value } }))}
+                              style={{ fontSize: '0.85rem', padding: '0.2rem 0.4rem', borderRadius: 4, border: '1px solid #ccc' }}
+                            >
+                              {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                            <button
+                              onClick={() => confirmAssign(lead)}
+                              disabled={a.status === 'adding'}
+                              style={smallBtn}
+                            >
+                              {a.status === 'adding' ? '…' : 'Add'}
+                            </button>
+                            {a.status === 'err' && (
+                              <span style={{ color: '#c62828', fontSize: '0.8rem' }}>{a.errMsg}</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr style={{ background: '#f9f9f9', borderBottom: '1px solid #eee' }}>
+                        <td colSpan={6} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
+                          <ScoreBreakdown explanation={lead.score_explanation} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 )
               })}
             </tbody>
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+function ScoreBreakdown({ explanation }) {
+  if (!explanation || Object.keys(explanation).length === 0) {
+    return (
+      <span style={{ color: '#888', fontSize: '0.82rem' }}>No score details available.</span>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem 1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <span style={{ fontSize: '0.78rem', color: '#888', marginRight: '0.25rem' }}>Score breakdown:</span>
+      {Object.entries(explanation).map(([key, val]) => (
+        <div key={key} style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem', fontSize: '0.82rem' }}>
+          <span style={{ color: '#555' }}>{FACTOR_LABELS[key] || key}</span>
+          <span style={{
+            fontWeight: 600,
+            color: val >= 0.15 ? '#2e7d32' : val >= 0.08 ? '#e65100' : '#888',
+          }}>
+            {val.toFixed(2)}
+          </span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -191,5 +250,6 @@ const card = { background: '#fff', padding: '1.25rem', borderRadius: 8, boxShado
 const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: '0.75rem' }
 const primaryBtn = { padding: '0.45rem 1.25rem', background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.95rem' }
 const smallBtn = { padding: '0.25rem 0.6rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', fontSize: '0.85rem' }
+const scoreCellBtn = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600, fontSize: '0.9rem', color: '#1a1a2e', display: 'flex', alignItems: 'center' }
 const th = { padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 600 }
 const td = { padding: '0.5rem 0.75rem', verticalAlign: 'middle' }
