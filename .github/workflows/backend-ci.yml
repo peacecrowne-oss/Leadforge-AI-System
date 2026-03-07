@@ -74,3 +74,6 @@ jobs:
 
       - name: API — campaign execution engine
         run: python scripts/tests/test_campaign_execution.py --base-url http://127.0.0.1:8000
+
+      - name: API — lead scoring determinism
+        run: python scripts/tests/test_lead_scoring.py --base-url http://127.0.0.1:8000

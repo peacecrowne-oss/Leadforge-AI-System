@@ -5,7 +5,7 @@ background task that drives the provider search simulation.
 
 Design constraints:
 - No FastAPI imports; no route definitions.
-- Imports models from models.py and persistence from db.sqlite only.
+- Imports models from models.py, persistence from db.sqlite, and scoring from services.scoring_service.
 - JOBS and RESULTS dicts are received as parameters rather than imported
   from main.py, which avoids circular imports while keeping the stores
   in a single authoritative location (main.py).
@@ -16,6 +16,7 @@ import time
 
 from models import Lead, SearchJob
 from db.sqlite import db_save_job, db_save_results
+from services.scoring_service import score_lead
 
 
 def dedupe_key(lead: Lead) -> str:
@@ -78,7 +79,7 @@ def simulate_provider_search(
         leads: list[Lead] = []
         for i, name in enumerate(mock_names[:count]):
             slug = name.lower().replace(" ", ".")
-            leads.append(Lead(
+            lead = Lead(
                 id=str(uuid.uuid4()),
                 full_name=name,
                 title=f"Senior {seed_title}" if i % 3 == 0 else seed_title,
@@ -86,8 +87,12 @@ def simulate_provider_search(
                 location=seed_location,
                 email=f"{slug}@example.com",
                 linkedin_url=f"https://linkedin.com/in/{slug}",
-                score=round(0.95 - i * 0.04, 2),
-            ))
+            )
+            computed_score, explanation = score_lead(lead, req)
+            leads.append(lead.model_copy(update={
+                "score": computed_score,
+                "score_explanation": explanation,
+            }))
 
         # Deduplicate: sort desc by score first so the first occurrence of any
         # key is always the highest-scored version, then keep only unique keys.

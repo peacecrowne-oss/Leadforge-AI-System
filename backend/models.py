@@ -25,6 +25,7 @@ class Lead(BaseModel):
     email: str | None = None
     linkedin_url: str | None = None
     score: float | None = None
+    score_explanation: dict | None = None
 
 
 class SearchJob(BaseModel):
