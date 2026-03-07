@@ -20,7 +20,18 @@ export default function Leads() {
   const [campaigns, setCampaigns] = useState([])
   const [assign, setAssign] = useState({})         // { [lead_id]: { open, selected, status } }
   const [scoreExpanded, setScoreExpanded] = useState({}) // { [lead_id]: bool }
+  const [sortOrder, setSortOrder] = useState('desc')     // 'desc' | 'asc'
+  const [minScore, setMinScore] = useState(0)
   const intervalRef = useRef(null)
+
+  // Client-side derived view — filter then sort; original `leads` is never mutated.
+  const displayLeads = leads
+    .filter(l => (l.score ?? 0) >= minScore)
+    .sort((a, b) =>
+      sortOrder === 'desc'
+        ? (b.score ?? 0) - (a.score ?? 0)
+        : (a.score ?? 0) - (b.score ?? 0)
+    )
 
   useEffect(() => {
     apiGet('/campaigns').then(setCampaigns).catch(() => {})
@@ -121,87 +132,132 @@ export default function Leads() {
       )}
 
       {leads.length > 0 && (
-        <div style={{ ...card, marginTop: '1rem', overflowX: 'auto' }}>
-          <h3 style={{ marginTop: 0 }}>{leads.length} lead{leads.length !== 1 ? 's' : ''} found</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-            <thead>
-              <tr style={{ background: '#f0f0f0' }}>
-                {['Name', 'Title', 'Company', 'Location', 'Score', 'Action'].map(h => (
-                  <th key={h} style={th}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {leads.map(lead => {
-                const a = assign[lead.id]
-                const expanded = !!scoreExpanded[lead.id]
-                return (
-                  <Fragment key={lead.id}>
-                    <tr style={{ borderBottom: expanded ? 'none' : '1px solid #eee' }}>
-                      <td style={td}>{lead.full_name}</td>
-                      <td style={td}>{lead.title || '—'}</td>
-                      <td style={td}>{lead.company || '—'}</td>
-                      <td style={td}>{lead.location || '—'}</td>
-                      <td style={td}>
-                        <button
-                          onClick={() => toggleScore(lead.id)}
-                          style={scoreCellBtn}
-                          title={expanded ? 'Hide score details' : 'Show score details'}
-                        >
-                          {lead.score != null ? lead.score.toFixed(2) : '—'}
-                          <span style={{ marginLeft: '0.3rem', fontSize: '0.7rem', opacity: 0.7 }}>
-                            {expanded ? '▾' : '▸'}
-                          </span>
-                        </button>
-                      </td>
-                      <td style={td}>
-                        {!a?.open ? (
-                          <button
-                            onClick={() => openAssign(lead.id)}
-                            disabled={campaigns.length === 0}
-                            style={smallBtn}
-                            title={campaigns.length === 0 ? 'Create a campaign first' : ''}
-                          >
-                            {campaigns.length === 0 ? 'No campaigns' : 'Add to Campaign'}
-                          </button>
-                        ) : a.status === 'added' ? (
-                          <span style={{ color: '#2e7d32', fontSize: '0.85rem' }}>✓ Added</span>
-                        ) : (
-                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                            <select
-                              value={a.selected}
-                              onChange={e => setAssign(as => ({ ...as, [lead.id]: { ...as[lead.id], selected: e.target.value } }))}
-                              style={{ fontSize: '0.85rem', padding: '0.2rem 0.4rem', borderRadius: 4, border: '1px solid #ccc' }}
-                            >
-                              {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                            </select>
+        <>
+          {/* ── Score controls ── */}
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
+            <label style={ctrlLabel}>
+              Sort:
+              <select value={sortOrder} onChange={e => setSortOrder(e.target.value)} style={ctrlSelect}>
+                <option value="desc">Highest score first</option>
+                <option value="asc">Lowest score first</option>
+              </select>
+            </label>
+            <label style={ctrlLabel}>
+              Min score:
+              <select value={minScore} onChange={e => setMinScore(Number(e.target.value))} style={ctrlSelect}>
+                <option value={0}>Any</option>
+                <option value={0.3}>≥ 0.30</option>
+                <option value={0.5}>≥ 0.50</option>
+                <option value={0.7}>≥ 0.70</option>
+              </select>
+            </label>
+            <span style={{ fontSize: '0.82rem', color: '#888', marginLeft: 'auto' }}>
+              {displayLeads.length} of {leads.length} lead{leads.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {/* ── Empty-after-filter state ── */}
+          {displayLeads.length === 0 ? (
+            <p style={{ marginTop: '1rem', color: '#555' }}>
+              No leads match the current score filter. Lower the minimum score or clear the filter.
+            </p>
+          ) : (
+            <div style={{ ...card, marginTop: '0.75rem', overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                <thead>
+                  <tr style={{ background: '#f0f0f0' }}>
+                    {['Name', 'Title', 'Company', 'Location', 'Score', 'Action'].map(h => (
+                      <th key={h} style={th}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayLeads.map((lead, idx) => {
+                    const a = assign[lead.id]
+                    const expanded = !!scoreExpanded[lead.id]
+                    const isTop = idx < 3
+                    return (
+                      <Fragment key={lead.id}>
+                        <tr style={{ borderBottom: expanded ? 'none' : '1px solid #eee' }}>
+                          <td style={td}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              {lead.full_name}
+                              {isTop && (
+                                <span style={{
+                                  fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.4rem',
+                                  borderRadius: 8, background: '#e8f5e9', color: '#2e7d32',
+                                  whiteSpace: 'nowrap',
+                                }}>
+                                  Top
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td style={td}>{lead.title || '—'}</td>
+                          <td style={td}>{lead.company || '—'}</td>
+                          <td style={td}>{lead.location || '—'}</td>
+                          <td style={td}>
                             <button
-                              onClick={() => confirmAssign(lead)}
-                              disabled={a.status === 'adding'}
-                              style={smallBtn}
+                              onClick={() => toggleScore(lead.id)}
+                              style={scoreCellBtn}
+                              title={expanded ? 'Hide score details' : 'Show score details'}
                             >
-                              {a.status === 'adding' ? '…' : 'Add'}
+                              {lead.score != null ? lead.score.toFixed(2) : '—'}
+                              <span style={{ marginLeft: '0.3rem', fontSize: '0.7rem', opacity: 0.7 }}>
+                                {expanded ? '▾' : '▸'}
+                              </span>
                             </button>
-                            {a.status === 'err' && (
-                              <span style={{ color: '#c62828', fontSize: '0.8rem' }}>{a.errMsg}</span>
+                          </td>
+                          <td style={td}>
+                            {!a?.open ? (
+                              <button
+                                onClick={() => openAssign(lead.id)}
+                                disabled={campaigns.length === 0}
+                                style={smallBtn}
+                                title={campaigns.length === 0 ? 'Create a campaign first' : ''}
+                              >
+                                {campaigns.length === 0 ? 'No campaigns' : 'Add to Campaign'}
+                              </button>
+                            ) : a.status === 'added' ? (
+                              <span style={{ color: '#2e7d32', fontSize: '0.85rem' }}>✓ Added</span>
+                            ) : (
+                              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <select
+                                  value={a.selected}
+                                  onChange={e => setAssign(as => ({ ...as, [lead.id]: { ...as[lead.id], selected: e.target.value } }))}
+                                  style={{ fontSize: '0.85rem', padding: '0.2rem 0.4rem', borderRadius: 4, border: '1px solid #ccc' }}
+                                >
+                                  {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                                <button
+                                  onClick={() => confirmAssign(lead)}
+                                  disabled={a.status === 'adding'}
+                                  style={smallBtn}
+                                >
+                                  {a.status === 'adding' ? '…' : 'Add'}
+                                </button>
+                                {a.status === 'err' && (
+                                  <span style={{ color: '#c62828', fontSize: '0.8rem' }}>{a.errMsg}</span>
+                                )}
+                              </div>
                             )}
-                          </div>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr style={{ background: '#f9f9f9', borderBottom: '1px solid #eee' }}>
+                            <td colSpan={6} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
+                              <ScoreBreakdown explanation={lead.score_explanation} />
+                            </td>
+                          </tr>
                         )}
-                      </td>
-                    </tr>
-                    {expanded && (
-                      <tr style={{ background: '#f9f9f9', borderBottom: '1px solid #eee' }}>
-                        <td colSpan={6} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
-                          <ScoreBreakdown explanation={lead.score_explanation} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                      </Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -251,5 +307,7 @@ const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(1
 const primaryBtn = { padding: '0.45rem 1.25rem', background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.95rem' }
 const smallBtn = { padding: '0.25rem 0.6rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', fontSize: '0.85rem' }
 const scoreCellBtn = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600, fontSize: '0.9rem', color: '#1a1a2e', display: 'flex', alignItems: 'center' }
+const ctrlLabel = { fontSize: '0.85rem', color: '#555', display: 'flex', gap: '0.4rem', alignItems: 'center' }
+const ctrlSelect = { padding: '0.25rem 0.4rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', background: '#fff' }
 const th = { padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 600 }
 const td = { padding: '0.5rem 0.75rem', verticalAlign: 'middle' }
