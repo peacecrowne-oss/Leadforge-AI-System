@@ -22,6 +22,8 @@ export default function Leads() {
   const [scoreExpanded, setScoreExpanded] = useState({}) // { [lead_id]: bool }
   const [sortOrder, setSortOrder] = useState('desc')     // 'desc' | 'asc'
   const [minScore, setMinScore] = useState(0)
+  const [nlQuery, setNlQuery] = useState('')
+  const [nlParsed, setNlParsed] = useState(null)
   const intervalRef = useRef(null)
 
   // Client-side derived view — filter then sort; original `leads` is never mutated.
@@ -44,6 +46,27 @@ export default function Leads() {
     setScoreExpanded(s => ({ ...s, [leadId]: !s[leadId] }))
   }
 
+  async function handleNlSearch(e) {
+    e.preventDefault()
+    clearInterval(intervalRef.current)
+    setPhase('searching')
+    setError(null)
+    setLeads([])
+    setAssign({})
+    setScoreExpanded({})
+    setNlParsed(null)
+    try {
+      const res = await apiPost('/leads/nl-search', { query: nlQuery })
+      setNlParsed(res.parsed)
+      setJobId(res.job_id)
+      setPhase('polling')
+      startPoll(res.job_id)
+    } catch (err) {
+      setError(err.message)
+      setPhase('error')
+    }
+  }
+
   async function handleSearch(e) {
     e.preventDefault()
     clearInterval(intervalRef.current)
@@ -52,6 +75,7 @@ export default function Leads() {
     setLeads([])
     setAssign({})
     setScoreExpanded({})
+    setNlParsed(null)
     try {
       const body = { limit: Math.max(1, Number(form.limit)) }
       if (form.keywords) body.keywords = form.keywords
@@ -111,6 +135,31 @@ export default function Leads() {
   return (
     <div>
       <h1 style={{ marginTop: 0 }}>Lead Search</h1>
+
+      <section style={{ ...card, marginBottom: '1rem' }}>
+        <h3 style={{ marginTop: 0 }}>Natural Language Search</h3>
+        <form onSubmit={handleNlSearch} style={{ display: 'flex', gap: '0.5rem' }}>
+          <input
+            value={nlQuery}
+            onChange={e => setNlQuery(e.target.value)}
+            placeholder="Find senior engineers in San Francisco"
+            style={{ flex: 1, padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4 }}
+          />
+          <button type="submit" disabled={busy || !nlQuery.trim()} style={primaryBtn}>
+            Search
+          </button>
+        </form>
+        {nlParsed && (
+          <div style={{ marginTop: '0.6rem', fontSize: '0.82rem', color: '#555', display: 'flex', gap: '0.5rem 1.25rem', flexWrap: 'wrap' }}>
+            <span style={{ color: '#888' }}>Interpreted as:</span>
+            {nlParsed.title    && <span><b>Title:</b> {nlParsed.title}</span>}
+            {nlParsed.keywords && <span><b>Keywords:</b> {nlParsed.keywords}</span>}
+            {nlParsed.location && <span><b>Location:</b> {nlParsed.location}</span>}
+            {nlParsed.company  && <span><b>Company:</b> {nlParsed.company}</span>}
+            <span><b>Limit:</b> {nlParsed.limit}</span>
+          </div>
+        )}
+      </section>
 
       <div style={card}>
         <form onSubmit={handleSearch}>
