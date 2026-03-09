@@ -19,6 +19,7 @@ layer free of any dependency on main.py and avoids circular imports.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,8 @@ from typing import TYPE_CHECKING
 import sqlite3
 
 from db.migrations.runner import run_migrations
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # Used by type checkers / IDEs only — never executed at runtime.
@@ -531,6 +534,69 @@ def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
         metrics = _compute_stats(lead_count)
         now = datetime.now(timezone.utc).isoformat()
 
+        # ── Experiment variant assignment ──────────────────────────────────
+        # Load the first 'running' experiment (oldest by created_at) and
+        # deterministically assign this campaign run to one of its variants.
+        # Skips silently if no running experiment exists or if the experiment
+        # is misconfigured (e.g. variants don't sum to 100).
+        assigned_variant_id: str | None = None
+        assigned_variant_name: str | None = None
+
+        exp_row = conn.execute(
+            "SELECT id FROM experiments WHERE status = 'running' "
+            "ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+
+        if exp_row is None:
+            logger.info(
+                "experiment_assignment_skipped campaign_id=%s reason=no_running_experiment",
+                campaign_id,
+            )
+        else:
+            variant_rows = conn.execute(
+                "SELECT id, experiment_id, name, traffic_percentage, created_at "
+                "FROM experiment_variants "
+                "WHERE experiment_id = ? "
+                "ORDER BY created_at ASC, id ASC",
+                (exp_row["id"],),
+            ).fetchall()
+
+            if variant_rows:
+                # Local imports: no circular dependency risk — models.py and
+                # services/ do not import db/sqlite.py.
+                from models import ExperimentVariantResponse
+                from services.experiment_service import assign_variant
+
+                variants = [
+                    ExperimentVariantResponse(**dict(r)) for r in variant_rows
+                ]
+                try:
+                    selected = assign_variant(campaign_id, variants)
+                    assigned_variant_id = selected.id
+                    assigned_variant_name = selected.name
+                    conn.execute(
+                        "INSERT INTO experiment_variant_events "
+                        "(id, experiment_id, variant_id, campaign_id, "
+                        "event_type, created_at) "
+                        "VALUES (?, ?, ?, ?, 'variant_assigned', ?)",
+                        (str(uuid.uuid4()), exp_row["id"], selected.id, campaign_id, now),
+                    )
+                    logger.info(
+                        "experiment_variant_assigned experiment_id=%s"
+                        " variant_id=%s campaign_id=%s",
+                        exp_row["id"],
+                        selected.id,
+                        campaign_id,
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "experiment_misconfigured experiment_id=%s"
+                        " campaign_id=%s error=%s",
+                        exp_row["id"],
+                        campaign_id,
+                        exc,
+                    )
+
         conn.execute(
             """
             INSERT INTO campaign_stats (
@@ -567,6 +633,8 @@ def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
         "execution_status": "completed",
         **metrics,
         "last_run_at": now,
+        "assigned_variant_id": assigned_variant_id,
+        "assigned_variant_name": assigned_variant_name,
     }
 
 
@@ -588,3 +656,38 @@ def db_get_campaign_stats(campaign_id: str, user_id: str) -> dict | None:
             (campaign_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+# ── Experiment functions ───────────────────────────────────────────────────────
+
+def db_get_experiment_metrics(experiment_id: str) -> list[dict]:
+    """Return per-variant metrics for a given experiment.
+
+    Each row contains:
+      variant_id        - the variant's UUID
+      variant_name      - the variant's display name
+      exposures         - count of 'variant_assigned' events for this variant
+      distinct_campaigns - count of distinct campaigns assigned to this variant
+
+    All variants for the experiment are returned even if they have zero
+    exposures (LEFT JOIN).  Ordered by variant creation time (oldest first).
+    """
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                ev.id                          AS variant_id,
+                ev.name                        AS variant_name,
+                COUNT(eve.id)                  AS exposures,
+                COUNT(DISTINCT eve.campaign_id) AS distinct_campaigns
+            FROM experiment_variants ev
+            LEFT JOIN experiment_variant_events eve
+                ON eve.variant_id = ev.id
+                AND eve.event_type = 'variant_assigned'
+            WHERE ev.experiment_id = ?
+            GROUP BY ev.id, ev.name
+            ORDER BY ev.created_at ASC, ev.id ASC
+            """,
+            (experiment_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]

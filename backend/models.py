@@ -111,3 +111,49 @@ class CampaignStatsResponse(BaseModel):
     replied_count: int
     failed_count: int
     last_run_at: str | None
+
+
+# ── A/B Testing models ────────────────────────────────────────────────────────
+
+ExperimentStatus = Literal["draft", "running", "paused", "completed"]
+
+
+class ExperimentCreate(BaseModel):
+    name: str
+    description: str | None = None
+    status: ExperimentStatus = "draft"
+
+
+class ExperimentVariantCreate(BaseModel):
+    name: str
+    traffic_percentage: int = Field(ge=0, le=100)
+
+
+class ExperimentVariantResponse(BaseModel):
+    id: str
+    experiment_id: str
+    name: str
+    traffic_percentage: int
+    created_at: str
+
+
+class ExperimentResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    status: str
+    created_at: str
+    variants: list[ExperimentVariantResponse] = []
+
+
+class ExperimentVariantMetrics(BaseModel):
+    variant_id: str
+    variant_name: str
+    exposures: int
+    distinct_campaigns: int
+
+
+class ExperimentWinnerResponse(BaseModel):
+    winning_variant_id: str | None
+    winning_variant_name: str | None
+    basis: str
