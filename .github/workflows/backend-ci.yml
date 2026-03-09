@@ -77,3 +77,6 @@ jobs:
 
       - name: API — lead scoring determinism
         run: python scripts/tests/test_lead_scoring.py --base-url http://127.0.0.1:8000
+
+      - name: API — natural language lead search
+        run: python scripts/tests/test_nl_search.py --base-url http://127.0.0.1:8000

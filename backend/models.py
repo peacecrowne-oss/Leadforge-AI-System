@@ -16,6 +16,10 @@ class LeadSearchRequest(BaseModel):
     limit: int = Field(default=25, ge=1, le=200)
 
 
+class NaturalLanguageSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+
+
 class Lead(BaseModel):
     id: str
     full_name: str
