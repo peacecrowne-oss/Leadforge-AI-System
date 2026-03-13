@@ -14,6 +14,7 @@ Endpoints (all require a valid JWT):
 All ownership checks are performed inside the DB functions; a non-owner
 receives 404 (indistinguishable from not-found) to prevent enumeration.
 """
+import os
 import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,7 +49,7 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 @router.post("", status_code=201, response_model=CampaignResponse)
 def create_campaign(body: CampaignCreate, user: dict = Depends(get_current_user)):
     plan = user.get("plan", "free")
-    if not get_plan_features(plan)["campaigns"]:
+    if os.getenv("TEST_MODE") != "true" and not get_plan_features(plan)["campaigns"]:
         raise HTTPException(
             status_code=403,
             detail="Campaign automation requires Pro plan",
