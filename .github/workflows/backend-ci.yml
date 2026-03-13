@@ -34,6 +34,7 @@ jobs:
         working-directory: backend
         env:
           JWT_SECRET: ci-test-secret
+          TEST_MODE: "true"
         run: uvicorn main:app --host 127.0.0.1 --port 8000 &
 
       - name: Wait for backend /health
