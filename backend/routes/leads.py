@@ -19,6 +19,7 @@ import uuid
 from models import LeadSearchRequest, Lead, SearchJob
 from services.search_service import simulate_provider_search
 from auth.dependencies import get_current_user
+from core.feature_flags import get_plan_features
 from db.sqlite import db_save_job, db_get_job, db_load_results
 from state import JOBS, JOB_OWNERS, RESULTS
 
@@ -73,6 +74,12 @@ def _get_owned_job(job_id: str, user_id: str) -> SearchJob:
 @router.post("/leads/search", status_code=202)
 def create_search_job(request: LeadSearchRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Create a lead search job and queue the simulation in the background."""
+    plan = current_user.get("plan", "free")
+    features = get_plan_features(plan)
+    search_limit = features["lead_search_limit"]
+    if isinstance(search_limit, int) and request.limit > search_limit:
+        request = request.model_copy(update={"limit": search_limit})
+
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 

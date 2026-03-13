@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 
 from auth.hashing import hash_password, verify_password
 from auth.jwt import create_access_token
-from db.sqlite import db_create_user, db_get_user_by_email
+from db.sqlite import db_connect, db_create_user, db_get_user_by_email, db_update_user_plan
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -46,6 +47,12 @@ def register(body: RegisterRequest) -> dict:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already registered",
+        )
+    consent_ts = datetime.now(timezone.utc).isoformat()
+    with db_connect() as conn:
+        conn.execute(
+            "UPDATE users SET consent_given = 1, consent_timestamp = ? WHERE user_id = ?",
+            (consent_ts, user["user_id"]),
         )
     return user
 
@@ -81,7 +88,7 @@ def login(form: OAuth2PasswordRequestForm = Depends()) -> dict:
         subject=user["user_id"],
         secret_key=secret_key,
         expires_minutes=60,
-        extra_claims={"email": user["email"], "role": user["role"]},
+        extra_claims={"email": user["email"], "role": user["role"], "plan": user.get("plan", "free")},
     )
     return {"access_token": token, "token_type": "bearer"}
 
@@ -116,6 +123,36 @@ def login_json(body: LoginJsonRequest) -> dict:
         subject=user["user_id"],
         secret_key=secret_key,
         expires_minutes=60,
-        extra_claims={"email": user["email"], "role": user["role"]},
+        extra_claims={"email": user["email"], "role": user["role"], "plan": user.get("plan", "free")},
     )
     return {"access_token": token, "token_type": "bearer"}
+
+
+# DEV ONLY
+class DevUpgradeRequest(BaseModel):
+    email: str
+    plan: str
+
+
+_VALID_PLANS = {"free", "pro", "enterprise"}
+
+
+@router.post("/dev-upgrade")
+def dev_upgrade(body: DevUpgradeRequest) -> dict:
+    """Upgrade a user's plan for local testing.
+
+    # DEV ONLY — not guarded by auth; do not expose in production.
+    """
+    if body.plan not in _VALID_PLANS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid plan. Must be one of: {sorted(_VALID_PLANS)}",
+        )
+    updated = db_update_user_plan(body.email, body.plan)
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return {
+        "email": updated["email"],
+        "plan": updated["plan"],
+        "message": "User upgraded successfully",
+    }

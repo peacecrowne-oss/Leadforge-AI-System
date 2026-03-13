@@ -8,13 +8,16 @@ from core.errors import (
     validation_exception_handler,
 )
 from core.logging import LoggingMiddleware, configure_logging
+from middleware.request_metrics import RequestMetricsMiddleware
 from db import db_init
 from routes.auth import router as auth_router
 from routes.campaigns import router as campaigns_router
 from routes.experiments import router as experiments_router
 from routes.leads import router
 from routes.nl_search import router as nl_search_router
+from routes.health import router as health_router
 from routes.system import router as system_router
+from routes.users import router as users_router
 
 # Configure logging before anything else so startup messages are captured.
 configure_logging()
@@ -37,6 +40,7 @@ app.add_middleware(
 # wrapping CORSMiddleware. Measures full request duration and stamps
 # X-Request-Id on all responses including error responses.
 app.add_middleware(LoggingMiddleware)
+app.add_middleware(RequestMetricsMiddleware)
 
 # Global exception handlers — must be registered before routes.
 app.add_exception_handler(HTTPException, http_exception_handler)
@@ -53,3 +57,5 @@ app.include_router(router)
 app.include_router(campaigns_router)
 app.include_router(nl_search_router)
 app.include_router(experiments_router)
+app.include_router(users_router)
+app.include_router(health_router, tags=["system"])

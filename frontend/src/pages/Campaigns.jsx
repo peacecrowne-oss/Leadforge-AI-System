@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { apiPost, apiGet } from '../lib/api'
+import { apiPost, apiGet, getUserPlan } from '../lib/api'
 
 export default function Campaigns() {
+  const plan = getUserPlan()
   const [campaigns, setCampaigns] = useState([])
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -65,29 +66,36 @@ export default function Campaigns() {
     <div>
       <h1 style={{ marginTop: 0 }}>Campaigns</h1>
 
-      <div style={card}>
-        <h3 style={{ marginTop: 0 }}>Create Campaign</h3>
-        <form onSubmit={handleCreate} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
-          <div style={{ flex: 1 }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>Campaign Name</label>
-            <input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              required
-              placeholder="e.g. Q1 Outreach"
-              style={{ width: '100%', padding: '0.4rem', boxSizing: 'border-box', border: '1px solid #ccc', borderRadius: 4 }}
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={creating}
-            style={{ padding: '0.45rem 1.25rem', background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-          >
-            {creating ? 'Creating…' : 'Create'}
-          </button>
-        </form>
-        {createError && <p style={{ color: '#c62828', marginTop: '0.5rem', fontSize: '0.9rem' }}>{createError}</p>}
-      </div>
+      {plan === 'free' ? (
+        <div style={{ ...card, background: '#fff8e1', border: '1px solid #ffe082' }}>
+          <h3 style={{ marginTop: 0, color: '#e65100' }}>Campaigns — Pro Feature</h3>
+          <p style={{ margin: 0, color: '#555' }}>Upgrade to Pro to run campaigns.</p>
+        </div>
+      ) : (
+        <div style={card}>
+          <h3 style={{ marginTop: 0 }}>Create Campaign</h3>
+          <form onSubmit={handleCreate} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>Campaign Name</label>
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                required
+                placeholder="e.g. Q1 Outreach"
+                style={{ width: '100%', padding: '0.4rem', boxSizing: 'border-box', border: '1px solid #ccc', borderRadius: 4 }}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={creating}
+              style={{ padding: '0.45rem 1.25rem', background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+            >
+              {creating ? 'Creating…' : 'Create'}
+            </button>
+          </form>
+          {createError && <p style={{ color: '#c62828', marginTop: '0.5rem', fontSize: '0.9rem' }}>{createError}</p>}
+        </div>
+      )}
 
       <div style={{ ...card, marginTop: '1rem' }}>
         <h3 style={{ marginTop: 0 }}>Campaigns ({campaigns.length})</h3>

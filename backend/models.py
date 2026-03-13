@@ -157,3 +157,11 @@ class ExperimentWinnerResponse(BaseModel):
     winning_variant_id: str | None
     winning_variant_name: str | None
     basis: str
+
+
+# ── GDPR / CCPA models ────────────────────────────────────────────────────────
+
+class UserDataExport(BaseModel):
+    user: dict
+    campaigns: list
+    search_jobs: list

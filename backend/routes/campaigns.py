@@ -19,6 +19,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth.dependencies import get_current_user
+from core.feature_flags import get_plan_features
 from db import (
     db_add_lead_to_campaign,
     db_create_campaign,
@@ -46,6 +47,12 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
 @router.post("", status_code=201, response_model=CampaignResponse)
 def create_campaign(body: CampaignCreate, user: dict = Depends(get_current_user)):
+    plan = user.get("plan", "free")
+    if not get_plan_features(plan)["campaigns"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Campaign automation requires Pro plan",
+        )
     return db_create_campaign(
         user_id=user["user_id"],
         name=body.name,

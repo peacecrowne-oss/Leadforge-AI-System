@@ -20,6 +20,7 @@ layer free of any dependency on main.py and avoids circular imports.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -273,6 +274,25 @@ def db_get_user_by_id(user_id: str) -> dict | None:
     return dict(row)
 
 
+def db_update_user_plan(email: str, plan: str) -> dict | None:
+    """Update the plan column for the user identified by email.
+
+    Normalizes email before lookup. Returns the updated public user dict
+    (no hashed_password), or None if no matching user exists.
+    """
+    email = email.strip().lower()
+    with db_connect() as conn:
+        conn.execute(
+            "UPDATE users SET plan = ? WHERE email = ?",
+            (plan, email),
+        )
+        row = conn.execute(
+            "SELECT user_id, email, role, plan, created_at FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 # ── Campaign functions ────────────────────────────────────────────────────────
 
 def _campaign_row(row) -> dict:
@@ -516,6 +536,7 @@ def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
     Raises ValueError if the campaign has no assigned leads.
     Returns the stats dict on success.
     """
+    start = time.monotonic()
     with db_connect() as conn:
         camp = conn.execute(
             "SELECT id FROM campaigns WHERE id = ? AND created_by_user_id = ?",
@@ -628,6 +649,13 @@ def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
             (now, campaign_id),
         )
 
+    duration_ms = round((time.monotonic() - start) * 1000)
+    logger.info(
+        "campaign_execution_completed campaign_id=%s duration_ms=%s assigned_variant_id=%s",
+        campaign_id,
+        duration_ms,
+        assigned_variant_id,
+    )
     return {
         "campaign_id": campaign_id,
         "execution_status": "completed",

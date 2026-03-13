@@ -1,28 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { login, setToken, getToken } from '../lib/api'
+import { register } from '../lib/api'
 
-export default function Login() {
+export default function Register() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
-    if (getToken()) navigate('/', { replace: true })
-  }, [navigate])
-
   async function handleSubmit(e) {
     e.preventDefault()
     setLoading(true)
     setError(null)
     try {
-      const token = await login(email, password)
-      setToken(token)
-      navigate('/', { replace: true })
+      await register(email, password)
+      navigate('/login', { replace: true })
     } catch (err) {
-      setError(err.message || 'Login failed')
+      setError(err.message || 'Registration failed')
     } finally {
       setLoading(false)
     }
@@ -37,7 +32,7 @@ export default function Login() {
         background: '#fff', padding: '2rem', borderRadius: 8,
         boxShadow: '0 2px 8px rgba(0,0,0,0.1)', width: 340,
       }}>
-        <h2 style={{ marginTop: 0, marginBottom: '1.5rem' }}>LeadForge — Sign in</h2>
+        <h2 style={{ marginTop: 0, marginBottom: '1.5rem' }}>LeadForge — Register</h2>
         <form onSubmit={handleSubmit}>
           <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem' }}>
             Email
@@ -72,12 +67,12 @@ export default function Login() {
               cursor: loading ? 'not-allowed' : 'pointer', fontSize: '1rem',
             }}
           >
-            {loading ? 'Signing in…' : 'Sign in'}
+            {loading ? 'Registering…' : 'Register'}
           </button>
         </form>
         <p style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.9rem', color: '#555' }}>
-          Don't have an account?{' '}
-          <Link to="/register" style={{ color: '#1a1a2e' }}>Register</Link>
+          Already have an account?{' '}
+          <Link to="/login" style={{ color: '#1a1a2e' }}>Sign in</Link>
         </p>
       </div>
     </div>

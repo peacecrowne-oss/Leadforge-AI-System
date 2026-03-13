@@ -59,5 +59,6 @@ else:
         db_run_campaign,
         db_get_campaign_stats,
         db_get_experiment_metrics,
+        db_update_user_plan,
     )
     _BACKEND = "sqlite"

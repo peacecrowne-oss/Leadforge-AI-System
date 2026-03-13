@@ -1,14 +1,16 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { clearToken } from '../lib/api'
+import { clearToken, getUserPlan } from '../lib/api'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/leads', label: 'Leads' },
   { to: '/campaigns', label: 'Campaigns' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 export default function Layout() {
   const navigate = useNavigate()
+  const plan = getUserPlan()
 
   function handleSignOut() {
     clearToken()
@@ -45,6 +47,27 @@ export default function Layout() {
             {label}
           </NavLink>
         ))}
+        {plan === 'enterprise' ? (
+          <NavLink
+            to="/experiments"
+            style={({ isActive }) => ({
+              color: isActive ? '#4fc3f7' : '#ccc',
+              textDecoration: 'none',
+              padding: '0.4rem 0.6rem',
+              borderRadius: 4,
+              background: isActive ? 'rgba(255,255,255,0.08)' : 'transparent',
+            })}
+          >
+            Experiments
+          </NavLink>
+        ) : (
+          <div style={{ padding: '0.4rem 0.6rem' }}>
+            <div style={{ color: '#666', fontSize: '0.9rem', cursor: 'default' }}>Experiments</div>
+            <div style={{ color: '#e65100', fontSize: '0.75rem', marginTop: '0.15rem' }}>
+              Upgrade to Enterprise to use A/B testing
+            </div>
+          </div>
+        )}
         <div style={{ marginTop: 'auto' }}>
           <button
             onClick={handleSignOut}
