@@ -1,5 +1,5 @@
 import http from "k6/http";
-import { sleep } from "k6";
+import { check, sleep } from "k6";
 
 export const options = {
   vus: 50,
@@ -24,7 +24,14 @@ export default function () {
     }
   };
 
-  http.post("http://localhost:8000/leads/search", payload, params);
+  const res = http.post("http://localhost:8000/leads/search", payload, params);
+
+  console.log(`STATUS: ${res.status}`);
+  console.log(`BODY: ${res.body}`);
+
+  check(res, {
+    "status valid": (r) => r.status === 200 || r.status === 403,
+  });
 
   sleep(1);
 }

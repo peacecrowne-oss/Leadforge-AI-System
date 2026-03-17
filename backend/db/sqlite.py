@@ -235,15 +235,16 @@ def db_create_user(
     with db_connect() as conn:
         conn.execute(
             """
-            INSERT INTO users (user_id, email, hashed_password, role, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO users (user_id, email, hashed_password, role, plan, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (user_id, email, hashed_password, role, created_at),
+            (user_id, email, hashed_password, role, "free", created_at),
         )
     return {
         "user_id": user_id,
         "email": email,
         "role": role,
+        "plan": "free",
         "created_at": created_at,
     }
 

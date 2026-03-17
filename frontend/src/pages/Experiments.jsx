@@ -1,15 +1,29 @@
 import { useState, useEffect } from 'react'
-import { apiGet } from '../lib/api'
+import { apiGet, getUserPlan } from '../lib/api'
 
 export default function Experiments() {
+  const plan = getUserPlan()
   const [experiments, setExperiments] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    if (plan !== 'enterprise') return
     apiGet('/experiments')
       .then(data => setExperiments(data))
       .catch(err => setError(err.message))
-  }, [])
+  }, [plan])
+
+  if (plan !== 'enterprise') {
+    return (
+      <div>
+        <h1 style={{ marginTop: 0 }}>Experiments</h1>
+        <div style={{ ...card, background: '#fff8e1', border: '1px solid #ffe082' }}>
+          <h3 style={{ marginTop: 0, color: '#e65100' }}>Enterprise Feature</h3>
+          <p style={{ margin: 0, color: '#555' }}>A/B testing experiments require an Enterprise plan.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>

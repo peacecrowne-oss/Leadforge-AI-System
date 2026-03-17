@@ -257,10 +257,10 @@ def db_create_user(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO users (user_id, email, hashed_password, role, created_at)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO users (user_id, email, hashed_password, role, plan, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (user_id, email, hashed_password, role, created_at),
+                (user_id, email, hashed_password, role, "free", created_at),
             )
         conn.commit()
     except Exception as exc:
@@ -272,7 +272,7 @@ def db_create_user(
         raise
     finally:
         conn.close()
-    return {"user_id": user_id, "email": email, "role": role, "created_at": created_at}
+    return {"user_id": user_id, "email": email, "role": role, "plan": "free", "created_at": created_at}
 
 
 def db_get_user_by_email(email: str) -> dict | None:
