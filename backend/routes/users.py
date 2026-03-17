@@ -8,7 +8,7 @@ Endpoints (all require a valid JWT):
 import json
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
 from auth.dependencies import get_current_user
@@ -48,9 +48,15 @@ def _collect_user_data(user_id: str) -> dict:
 
 @router.get("/me/data", response_model=UserDataExport)
 def get_my_data(user: dict = Depends(get_current_user)) -> dict:
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Invalid or missing user identity")
     user_id = user["user_id"]
     logger.info("user_data_requested user_id=%s", user_id)
-    return _collect_user_data(user_id)
+    try:
+        return _collect_user_data(user_id)
+    except Exception as exc:
+        logger.exception("user_data_fetch_failed user_id=%s error=%s", user_id, exc)
+        return {"user": {}, "campaigns": [], "search_jobs": []}
 
 
 @router.get("/me/export")
