@@ -14,10 +14,13 @@ Endpoints (all require a valid JWT):
 All ownership checks are performed inside the DB functions; a non-owner
 receives 404 (indistinguishable from not-found) to prevent enumeration.
 """
+import json
+import logging
 import os
 import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
 from core.feature_flags import get_plan_features
@@ -43,7 +46,13 @@ from models import (
     CampaignUpdate,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+
+
+class SaveMessageRequest(BaseModel):
+    message: str
 
 
 @router.post("", status_code=201, response_model=CampaignResponse)
@@ -157,3 +166,28 @@ def get_campaign_stats(campaign_id: str, user: dict = Depends(get_current_user))
     if stats is None:
         raise HTTPException(status_code=404, detail="No stats found for this campaign")
     return stats
+
+
+@router.post("/{campaign_id}/message")
+def save_campaign_message(
+    campaign_id: str,
+    req: SaveMessageRequest,
+    user: dict = Depends(get_current_user),
+):
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Invalid user")
+    try:
+        # Store message in settings_json (no dedicated column exists yet)
+        updated = db_update_campaign(
+            campaign_id,
+            user["user_id"],
+            settings_json=json.dumps({"generated_message": req.message}),
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        return {"status": "saved"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("save_message_failed %s", exc)
+        return {"status": "error"}

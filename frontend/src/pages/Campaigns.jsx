@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
-import { apiPost, apiGet, getUserPlan } from '../lib/api'
+import { apiPost, apiGet, getUserPlan, getToken } from '../lib/api'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
 export default function Campaigns() {
   const plan = getUserPlan()
@@ -9,6 +11,7 @@ export default function Campaigns() {
   const [createError, setCreateError] = useState(null)
   const [stats, setStats] = useState({})    // { [id]: 'loading' | 'error:<msg>' | stats_obj }
   const [running, setRunning] = useState({}) // { [id]: bool }
+  const [generatedMessages, setGeneratedMessages] = useState({})
 
   useEffect(() => { fetchCampaigns() }, [])
 
@@ -48,6 +51,41 @@ export default function Campaigns() {
       setStats(st => ({ ...st, [id]: 'error:' + msg }))
     } finally {
       setRunning(r => ({ ...r, [id]: false }))
+    }
+  }
+
+  async function handleGenerateMessage(campaign) {
+    const res = await fetch(`${API_BASE}/ai/generate-message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({
+        business_name: campaign.name,
+        industry: 'restaurant',
+        pain_point: 'low online sales',
+      }),
+    })
+    const data = await res.json()
+    setGeneratedMessages(prev => ({ ...prev, [campaign.id]: data.message }))
+  }
+
+  async function handleSaveMessage(campaignId) {
+    const message = generatedMessages[campaignId]
+    const res = await fetch(`${API_BASE}/campaigns/${campaignId}/message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({ message }),
+    })
+    const data = await res.json()
+    if (data.status === 'saved') {
+      alert('Message saved!')
+    } else {
+      alert('Failed to save message')
     }
   }
 
@@ -117,6 +155,10 @@ export default function Campaigns() {
                   isRunning={!!running[c.id]}
                   onRun={() => handleRun(c.id)}
                   onStats={() => handleViewStats(c.id)}
+                  onGenerateMessage={() => handleGenerateMessage(c)}
+                  generatedMessage={generatedMessages[c.id]}
+                  onMessageChange={val => setGeneratedMessages(prev => ({ ...prev, [c.id]: val }))}
+                  onSaveMessage={() => handleSaveMessage(c.id)}
                 />
               ))}
             </tbody>
@@ -127,7 +169,7 @@ export default function Campaigns() {
   )
 }
 
-function CampaignRow({ campaign: c, stat, isRunning, onRun, onStats }) {
+function CampaignRow({ campaign: c, stat, isRunning, onRun, onStats, onGenerateMessage, generatedMessage, onMessageChange, onSaveMessage }) {
   return (
     <>
       <tr style={{ borderBottom: stat ? 'none' : '1px solid #eee' }}>
@@ -142,9 +184,24 @@ function CampaignRow({ campaign: c, stat, isRunning, onRun, onStats }) {
               {isRunning ? 'Running…' : 'Run'}
             </button>
             <button onClick={onStats} style={smallBtn}>Stats</button>
+            <button onClick={onGenerateMessage} style={smallBtn}>Generate Message</button>
           </div>
         </td>
       </tr>
+      {generatedMessage && (
+        <tr style={{ borderBottom: '1px solid #eee', background: '#fffde7' }}>
+          <td colSpan={4} style={{ padding: '0.5rem 0.75rem' }}>
+            <div style={{ marginTop: '10px' }}>
+              <textarea
+                value={generatedMessage}
+                onChange={e => onMessageChange(e.target.value)}
+                style={{ width: '100%', height: '120px', padding: '8px' }}
+              />
+              <button onClick={onSaveMessage} style={{ marginTop: '6px' }}>Save Message</button>
+            </div>
+          </td>
+        </tr>
+      )}
       {stat && (
         <tr style={{ borderBottom: '1px solid #eee', background: '#f9f9f9' }}>
           <td colSpan={4} style={{ padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}>
@@ -157,19 +214,25 @@ function CampaignRow({ campaign: c, stat, isRunning, onRun, onStats }) {
 }
 
 function StatsRow({ stat }) {
-  if (stat === 'loading') return <span style={{ color: '#888' }}>Loading stats…</span>
-  if (typeof stat === 'string' && stat.startsWith('error:')) {
-    return <span style={{ color: '#c62828' }}>{stat.replace('error:', '')}</span>
+  if (stat === 'loading') {
+    return <div style={{ padding: '10px', color: '#888' }}>Loading stats...</div>
   }
+  if (typeof stat === 'string' && stat.startsWith('error:')) {
+    return <div style={{ padding: '10px', color: 'red' }}>{stat.replace('error:', '')}</div>
+  }
+  const s = stat
+  const openRate = s.sent_count ? Math.round((s.opened_count / s.sent_count) * 100) : 0
+  const replyRate = s.opened_count ? Math.round((s.replied_count / s.opened_count) * 100) : 0
   return (
-    <span>
-      Leads: <b>{stat.total_leads}</b> &nbsp;|&nbsp;
-      Sent: <b>{stat.sent_count}</b> &nbsp;|&nbsp;
-      Opened: <b>{stat.opened_count}</b> &nbsp;|&nbsp;
-      Replied: <b>{stat.replied_count}</b> &nbsp;|&nbsp;
-      Failed: <b>{stat.failed_count}</b> &nbsp;|&nbsp;
-      Status: <b>{stat.execution_status}</b>
-    </span>
+    <div style={{ marginTop: '10px', padding: '12px', border: '1px solid #ddd', borderRadius: '8px', background: '#fafafa' }}>
+      <strong>Campaign Stats</strong>
+      <div>Leads: {s.total_leads}</div>
+      <div>Sent: {s.sent_count}</div>
+      <div>Opened: {s.opened_count} ({openRate}%)</div>
+      <div>Replied: {s.replied_count} ({replyRate}%)</div>
+      <div>Failed: {s.failed_count}</div>
+      <div>Status: {s.execution_status}</div>
+    </div>
   )
 }
 

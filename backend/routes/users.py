@@ -29,13 +29,15 @@ def _collect_user_data(user_id: str) -> dict:
             (user_id,),
         ).fetchone()
 
+        # campaigns.created_by_user_id is the ownership column (not user_id)
         campaign_rows = conn.execute(
-            "SELECT id, name, status, created_at FROM campaigns WHERE user_id = ?",
+            "SELECT id, name, status, created_at FROM campaigns WHERE created_by_user_id = ?",
             (user_id,),
         ).fetchall()
 
+        # table is named 'jobs'; request_json holds the search query payload
         job_rows = conn.execute(
-            "SELECT job_id, status, query, created_at FROM search_jobs WHERE user_id = ?",
+            "SELECT job_id, status, request_json, created_at FROM jobs WHERE user_id = ?",
             (user_id,),
         ).fetchall()
 
@@ -61,9 +63,15 @@ def get_my_data(user: dict = Depends(get_current_user)) -> dict:
 
 @router.get("/me/export")
 def export_my_data(user: dict = Depends(get_current_user)) -> Response:
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Invalid or missing user identity")
     user_id = user["user_id"]
     logger.info("user_data_exported user_id=%s", user_id)
-    data = _collect_user_data(user_id)
+    try:
+        data = _collect_user_data(user_id)
+    except Exception as exc:
+        logger.exception("user_data_export_failed user_id=%s error=%s", user_id, exc)
+        data = {"user": {}, "campaigns": [], "search_jobs": []}
     content = json.dumps(data, indent=2)
     return Response(
         content=content,
@@ -74,15 +82,22 @@ def export_my_data(user: dict = Depends(get_current_user)) -> Response:
 
 @router.delete("/me", status_code=200)
 def delete_my_account(user: dict = Depends(get_current_user)) -> dict:
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Invalid or missing user identity")
     user_id = user["user_id"]
-    with db_connect() as conn:
-        conn.execute(
-            "DELETE FROM experiment_variant_events WHERE campaign_id IN "
-            "(SELECT id FROM campaigns WHERE user_id = ?)",
-            (user_id,),
-        )
-        conn.execute("DELETE FROM campaigns WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM search_jobs WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-    logger.info("user_account_deleted user_id=%s", user_id)
-    return {"message": "User account and associated data deleted"}
+    try:
+        with db_connect() as conn:
+            # child records first to avoid FK constraint violations
+            conn.execute(
+                "DELETE FROM experiment_variant_events WHERE campaign_id IN "
+                "(SELECT id FROM campaigns WHERE user_id = ?)",
+                (user_id,),
+            )
+            conn.execute("DELETE FROM campaigns WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM search_jobs WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        logger.info("user_account_deleted user_id=%s", user_id)
+        return {"message": "User account and associated data deleted"}
+    except Exception as exc:
+        logger.exception("user_data_delete_failed user_id=%s error=%s", user_id, exc)
+        return {"message": "Delete failed safely"}

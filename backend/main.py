@@ -18,6 +18,7 @@ from routes.nl_search import router as nl_search_router
 from routes.health import router as health_router
 from routes.system import router as system_router
 from routes.users import router as users_router
+from routes.ai import router as ai_router
 
 # Configure logging before anything else so startup messages are captured.
 configure_logging()
@@ -58,4 +59,5 @@ app.include_router(campaigns_router)
 app.include_router(nl_search_router)
 app.include_router(experiments_router)
 app.include_router(users_router)
+app.include_router(ai_router)
 app.include_router(health_router, tags=["system"])
