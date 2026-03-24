@@ -98,7 +98,8 @@ def list_experiments(user: dict = Depends(get_current_user)):
     logger.info("experiments_list user_id=%s", user["user_id"])
     with db_connect() as conn:
         rows = conn.execute(
-            "SELECT id, name, description, status, created_at "
+            "SELECT id, name, description, status, created_at, "
+            "winning_variant_id, winner_basis "
             "FROM experiments ORDER BY created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
@@ -216,3 +217,37 @@ def start_experiment(experiment_id: str, user: dict = Depends(get_current_user))
         "created_at": row["created_at"],
         "variants": [],
     }
+
+
+@router.post("/{experiment_id}/complete", response_model=ExperimentWinnerResponse)
+def complete_experiment(experiment_id: str, user: dict = Depends(get_current_user)):
+    _check_experiments_access(user)
+
+    experiment = _load_experiment(experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if experiment["status"] == "completed":
+        raise HTTPException(status_code=409, detail="Experiment is already completed")
+
+    metrics = [
+        ExperimentVariantMetrics(**row)
+        for row in db_get_experiment_metrics(experiment_id)
+    ]
+    result = evaluate_winner(metrics)
+
+    with db_connect() as conn:
+        conn.execute(
+            "UPDATE experiments "
+            "SET status = 'completed', winning_variant_id = ?, winner_basis = ? "
+            "WHERE id = ?",
+            (result.winning_variant_id, result.basis, experiment_id),
+        )
+
+    logger.info(
+        "experiment_completed experiment_id=%s winner=%s user_id=%s",
+        experiment_id,
+        result.winning_variant_id,
+        user["user_id"],
+    )
+
+    return result

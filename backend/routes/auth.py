@@ -141,8 +141,13 @@ _VALID_PLANS = {"free", "pro", "enterprise"}
 def dev_upgrade(body: DevUpgradeRequest) -> dict:
     """Upgrade a user's plan for local testing.
 
-    # DEV ONLY — not guarded by auth; do not expose in production.
+    # DEV ONLY — only available when TEST_MODE=true.
     """
+    if os.getenv("TEST_MODE", "").lower() != "true":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is only available in test/dev mode",
+        )
     if body.plan not in _VALID_PLANS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -74,10 +74,10 @@ def evaluate_winner(
     Rules:
       - No variants supplied → no winner; basis explains empty input.
       - All exposures == 0   → no winner; basis = "no exposures recorded".
-      - Multiple variants share the highest exposure count → no winner;
-        basis = "tie: N variants at X exposures".
+      - Multiple variants share the highest exposure count → tiebreak on
+        distinct_campaigns; if still tied → no winner with clear reason.
       - Otherwise → winner is the single variant with the most exposures;
-        basis = "highest exposures (X)".
+        basis = "highest exposures (X) with Y distinct campaigns".
     """
     if not metrics:
         return ExperimentWinnerResponse(
@@ -98,15 +98,23 @@ def evaluate_winner(
     leaders = [m for m in metrics if m.exposures == max_exposures]
 
     if len(leaders) > 1:
-        return ExperimentWinnerResponse(
-            winning_variant_id=None,
-            winning_variant_name=None,
-            basis=f"tie: {len(leaders)} variants at {max_exposures} exposures",
-        )
+        # Tiebreak: use distinct_campaigns as secondary metric
+        max_campaigns = max(m.distinct_campaigns for m in leaders)
+        leaders = [m for m in leaders if m.distinct_campaigns == max_campaigns]
+
+        if len(leaders) > 1:
+            return ExperimentWinnerResponse(
+                winning_variant_id=None,
+                winning_variant_name=None,
+                basis=(
+                    f"tie: {len(leaders)} variants at {max_exposures} exposures "
+                    f"and {max_campaigns} distinct campaigns"
+                ),
+            )
 
     winner = leaders[0]
     return ExperimentWinnerResponse(
         winning_variant_id=winner.variant_id,
         winning_variant_name=winner.variant_name,
-        basis=f"highest exposures ({max_exposures})",
+        basis=f"highest exposures ({winner.exposures}) with {winner.distinct_campaigns} distinct campaigns",
     )

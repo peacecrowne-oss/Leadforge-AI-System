@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
 import { apiPost, apiGet } from '../lib/api'
+import ReplyThread from '../components/ReplyThread'
 
 const POLL_MS = 1500
 
@@ -20,6 +21,7 @@ export default function Leads() {
   const [campaigns, setCampaigns] = useState([])
   const [assign, setAssign] = useState({})         // { [lead_id]: { open, selected, status } }
   const [scoreExpanded, setScoreExpanded] = useState({}) // { [lead_id]: bool }
+  const [threadExpanded, setThreadExpanded] = useState({}) // { [lead_id]: bool }
   const [sortOrder, setSortOrder] = useState('desc')     // 'desc' | 'asc'
   const [minScore, setMinScore] = useState(0)
   const [nlQuery, setNlQuery] = useState('')
@@ -227,7 +229,7 @@ export default function Leads() {
                     const isTop = idx < 3
                     return (
                       <Fragment key={lead.id}>
-                        <tr style={{ borderBottom: expanded ? 'none' : '1px solid #eee' }}>
+                        <tr style={{ borderBottom: (expanded || threadExpanded[lead.id]) ? 'none' : '1px solid #eee' }}>
                           <td style={td}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                               {lead.full_name}
@@ -258,6 +260,12 @@ export default function Leads() {
                             </button>
                           </td>
                           <td style={td}>
+                            <button
+                              onClick={() => setThreadExpanded(t => ({ ...t, [lead.id]: !t[lead.id] }))}
+                              style={{ ...smallBtn, marginBottom: '0.35rem' }}
+                            >
+                              {threadExpanded[lead.id] ? 'Hide Thread' : 'Thread'}
+                            </button>
                             {!a?.open ? (
                               <button
                                 onClick={() => openAssign(lead.id)}
@@ -293,9 +301,19 @@ export default function Leads() {
                           </td>
                         </tr>
                         {expanded && (
-                          <tr style={{ background: '#f9f9f9', borderBottom: '1px solid #eee' }}>
+                          <tr style={{ background: '#f9f9f9', borderBottom: threadExpanded[lead.id] ? 'none' : '1px solid #eee' }}>
                             <td colSpan={6} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
                               <ScoreBreakdown explanation={lead.score_explanation} />
+                            </td>
+                          </tr>
+                        )}
+                        {threadExpanded[lead.id] && (
+                          <tr style={{ background: '#fafafa', borderBottom: '1px solid #eee' }}>
+                            <td colSpan={6} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
+                              <p style={{ margin: '0 0 0.5rem', fontSize: '0.78rem', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                Conversation
+                              </p>
+                              <ReplyThread leadId={lead.id} />
                             </td>
                           </tr>
                         )}
