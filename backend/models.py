@@ -144,6 +144,8 @@ class ExperimentResponse(BaseModel):
     status: str
     created_at: str
     variants: list[ExperimentVariantResponse] = []
+    winning_variant_id: str | None = None
+    winner_basis: str | None = None
 
 
 class ExperimentVariantMetrics(BaseModel):
@@ -157,6 +159,36 @@ class ExperimentWinnerResponse(BaseModel):
     winning_variant_id: str | None
     winning_variant_name: str | None
     basis: str
+
+
+# ── Reply models ──────────────────────────────────────────────────────────────
+
+class ReplyCreate(BaseModel):
+    body: str = Field(min_length=1)
+    direction: Literal["inbound", "outbound"] = "inbound"
+    sender_email: str | None = None
+    campaign_id: str | None = None
+
+
+class ReplyResponse(BaseModel):
+    id: str
+    lead_id: str
+    campaign_id: str | None
+    user_id: str
+    direction: str
+    body: str
+    sender_email: str | None
+    created_at: str
+
+
+class InboxItem(BaseModel):
+    lead_id: str
+    full_name: str | None
+    reply_count: int
+    latest_body: str
+    latest_direction: str
+    latest_sender_email: str | None
+    latest_at: str
 
 
 # ── GDPR / CCPA models ────────────────────────────────────────────────────────

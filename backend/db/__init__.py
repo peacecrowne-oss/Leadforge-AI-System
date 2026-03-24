@@ -60,5 +60,8 @@ else:
         db_get_campaign_stats,
         db_get_experiment_metrics,
         db_update_user_plan,
+        db_insert_reply,
+        db_get_replies_by_lead,
+        db_get_inbox,
     )
     _BACKEND = "sqlite"

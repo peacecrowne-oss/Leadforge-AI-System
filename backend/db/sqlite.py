@@ -720,3 +720,90 @@ def db_get_experiment_metrics(experiment_id: str) -> list[dict]:
             (experiment_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ── Replies ───────────────────────────────────────────────────────────────────
+
+def db_get_inbox(user_id: str) -> list[dict]:
+    """Return one inbox row per lead that has replies, newest first.
+
+    Each row contains the latest reply preview and the lead's full_name
+    resolved via a LEFT JOIN on job_leads (null when not found).
+    """
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                r.lead_id,
+                r.body           AS latest_body,
+                r.direction      AS latest_direction,
+                r.sender_email   AS latest_sender_email,
+                r.created_at     AS latest_at,
+                cnt.reply_count,
+                jl.full_name
+            FROM replies r
+            JOIN (
+                SELECT lead_id,
+                       COUNT(*)        AS reply_count,
+                       MAX(created_at) AS max_at
+                FROM replies
+                WHERE user_id = ?
+                GROUP BY lead_id
+            ) cnt ON cnt.lead_id = r.lead_id AND cnt.max_at = r.created_at
+            LEFT JOIN (
+                SELECT lead_id, full_name FROM job_leads GROUP BY lead_id
+            ) jl ON jl.lead_id = r.lead_id
+            WHERE r.user_id = ?
+            ORDER BY r.created_at DESC
+            """,
+            (user_id, user_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def db_get_replies_by_lead(lead_id: str, user_id: str) -> list[dict]:
+    """Return all replies for a lead owned by user_id, oldest first."""
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM replies
+            WHERE lead_id = ? AND user_id = ?
+            ORDER BY created_at ASC
+            """,
+            (lead_id, user_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def db_insert_reply(
+    lead_id: str,
+    user_id: str,
+    body: str,
+    direction: str = "inbound",
+    sender_email: str | None = None,
+    campaign_id: str | None = None,
+) -> dict:
+    """Insert a reply row and return it as a plain dict."""
+    reply_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    with db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO replies
+                (id, lead_id, campaign_id, user_id, direction,
+                 body, sender_email, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (reply_id, lead_id, campaign_id, user_id, direction,
+             body, sender_email, now),
+        )
+    return {
+        "id": reply_id,
+        "lead_id": lead_id,
+        "campaign_id": campaign_id,
+        "user_id": user_id,
+        "direction": direction,
+        "body": body,
+        "sender_email": sender_email,
+        "created_at": now,
+    }

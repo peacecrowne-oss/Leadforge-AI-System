@@ -6,6 +6,7 @@ import Campaigns from './pages/Campaigns'
 import Experiments from './pages/Experiments'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import Inbox from './pages/Inbox'
 import Settings from './pages/Settings'
 import NotFound from './pages/NotFound'
 
@@ -18,6 +19,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="leads" element={<Leads />} />
+          <Route path="inbox" element={<Inbox />} />
           <Route path="campaigns" element={<Campaigns />} />
           <Route path="experiments" element={<Experiments />} />
           <Route path="settings" element={<Settings />} />

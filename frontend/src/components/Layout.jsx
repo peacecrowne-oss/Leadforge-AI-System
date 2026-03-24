@@ -4,6 +4,7 @@ import { clearToken, getUserPlan } from '../lib/api'
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/leads', label: 'Leads' },
+  { to: '/inbox', label: 'Inbox' },
   { to: '/campaigns', label: 'Campaigns' },
   { to: '/settings', label: 'Settings' },
 ]
