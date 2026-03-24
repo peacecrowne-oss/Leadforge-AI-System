@@ -99,3 +99,6 @@ frontend/.env.production.local
 
 # Optional: ignore local PowerShell/command history artifacts if any appear
 *.stackdump
+
+# Test/debug request bodies
+body.json
