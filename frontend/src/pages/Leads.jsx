@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
-import { apiPost, apiGet } from '../lib/api'
+import { apiPost, apiGet, getToken } from '../lib/api'
 import ReplyThread from '../components/ReplyThread'
 
 const POLL_MS = 1500
@@ -13,6 +13,10 @@ const FACTOR_LABELS = {
 }
 
 export default function Leads() {
+  // ── DEBUG: set to a known job_id to load CSV/Apollo import results directly.
+  // Set to null to use normal search flow.
+  const debugJobId = "063b0afb-cd3e-431f-94c6-0c188896cc27"
+
   const [form, setForm] = useState({ keywords: '', location: '', company: '', limit: '5' })
   const [phase, setPhase] = useState('idle')   // idle | searching | polling | done | error
   const [jobId, setJobId] = useState(null)
@@ -26,6 +30,7 @@ export default function Leads() {
   const [minScore, setMinScore] = useState(0)
   const [nlQuery, setNlQuery] = useState('')
   const [nlParsed, setNlParsed] = useState(null)
+  const [jobs, setJobs] = useState([])   // recent job history (persisted in localStorage)
   const intervalRef = useRef(null)
 
   // Client-side derived view — filter then sort; original `leads` is never mutated.
@@ -38,9 +43,31 @@ export default function Leads() {
     )
 
   useEffect(() => {
+    // Restore job history saved from previous sessions.
+    try {
+      const saved = JSON.parse(localStorage.getItem('leadforge_jobs') || '[]')
+      setJobs(saved)
+    } catch {}
     apiGet('/campaigns').then(setCampaigns).catch(() => {})
     return () => clearInterval(intervalRef.current)
   }, [])
+
+  // When a search or import completes, save the job to history.
+  useEffect(() => {
+    if (phase === 'done' && jobId) {
+      setJobs(prev => {
+        if (prev.find(j => j.job_id === jobId)) return prev   // already recorded
+        const entry = {
+          job_id:        jobId,
+          results_count: leads.length,
+          created_at:    new Date().toISOString(),
+        }
+        const updated = [entry, ...prev].slice(0, 10)         // keep last 10
+        localStorage.setItem('leadforge_jobs', JSON.stringify(updated))
+        return updated
+      })
+    }
+  }, [phase, jobId, leads.length])
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }))
 
@@ -83,6 +110,7 @@ export default function Leads() {
       if (form.keywords) body.keywords = form.keywords
       if (form.location) body.location = form.location
       if (form.company) body.company = form.company
+      console.log('[Search Request]', body)
       const { job_id } = await apiPost('/leads/search', body)
       setJobId(job_id)
       setPhase('polling')
@@ -93,7 +121,70 @@ export default function Leads() {
     }
   }
 
+  async function handleLoadJob(jid) {
+    clearInterval(intervalRef.current)
+    setPhase('searching')
+    setError(null)
+    setLeads([])
+    try {
+      const res = await apiGet(`/leads/jobs/${jid}/results`)
+      setLeads(res.results || [])
+      setJobId(jid)
+      setPhase('done')
+    } catch (err) {
+      setError(err.message)
+      setPhase('error')
+    }
+  }
+
+  async function handleImportCsv(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    clearInterval(intervalRef.current)
+    setPhase('searching')
+    setError(null)
+    setLeads([])
+    setAssign({})
+    setScoreExpanded({})
+    setNlParsed(null)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const base = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+      const res = await fetch(`${base}/leads/import/csv`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body: formData,
+      })
+      if (!res.ok) throw new Error(res.statusText)
+      const data = await res.json()
+      setJobId(data.job_id)
+      setPhase('polling')
+      startPoll(data.job_id)
+    } catch (err) {
+      setError(err.message)
+      setPhase('error')
+    }
+  }
+
+  async function handleLoadDebugJob() {
+    if (!debugJobId) return
+    setPhase('searching')
+    setError(null)
+    setLeads([])
+    try {
+      const res = await apiGet(`/leads/jobs/${debugJobId}/results`)
+      setLeads(res.results || [])
+      setJobId(debugJobId)
+      setPhase('done')
+    } catch (err) {
+      setError(err.message)
+      setPhase('error')
+    }
+  }
+
   function startPoll(jid) {
+    console.log('[Leads] polling job_id:', jid)
     intervalRef.current = setInterval(async () => {
       try {
         const job = await apiGet(`/leads/jobs/${jid}`)
@@ -117,6 +208,19 @@ export default function Leads() {
 
   function openAssign(leadId) {
     setAssign(a => ({ ...a, [leadId]: { open: true, selected: campaigns[0]?.id || '', status: 'idle' } }))
+  }
+
+  async function simulateReply(leadId) {
+    try {
+      await apiPost(`/leads/${leadId}/replies`, {
+        body: "Hi, I'm interested in your service. Can you share more details?",
+        sender_email: 'owner@restaurant.com',
+        direction: 'inbound',
+      })
+      console.log('Reply created')
+    } catch (err) {
+      console.error('Failed to create reply:', err.message)
+    }
   }
 
   async function confirmAssign(lead) {
@@ -162,6 +266,63 @@ export default function Leads() {
           </div>
         )}
       </section>
+
+      <section style={{ ...card, marginBottom: '1rem' }}>
+        <h3 style={{ marginTop: 0 }}>Import CSV</h3>
+        <input
+          type="file"
+          accept=".csv"
+          disabled={busy}
+          onChange={handleImportCsv}
+          style={{ fontSize: '0.9rem' }}
+        />
+      </section>
+
+      {jobs.length > 0 && (
+        <section style={{ ...card, marginBottom: '1rem' }}>
+          <h3 style={{ marginTop: 0 }}>Recent Imports</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            {jobs.map(j => (
+              <button
+                key={j.job_id}
+                onClick={() => handleLoadJob(j.job_id)}
+                disabled={busy}
+                style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '0.45rem 0.75rem', border: '1px solid',
+                  borderColor: j.job_id === jobId ? '#1a1a2e' : '#ddd',
+                  borderRadius: 6, background: j.job_id === jobId ? '#f0f0f8' : '#fff',
+                  cursor: 'pointer', fontSize: '0.85rem', textAlign: 'left',
+                  fontWeight: j.job_id === jobId ? 600 : 400,
+                }}
+              >
+                <span style={{ fontFamily: 'monospace', color: '#555' }}>
+                  {j.job_id.slice(0, 8)}…
+                </span>
+                <span style={{ color: '#888' }}>
+                  {j.results_count} lead{j.results_count !== 1 ? 's' : ''}
+                  {j.created_at && (
+                    <span style={{ marginLeft: '0.75rem' }}>
+                      {new Date(j.created_at).toLocaleString()}
+                    </span>
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {debugJobId && (
+        <section style={{ ...card, marginBottom: '1rem', border: '1px dashed #f90' }}>
+          <span style={{ fontSize: '0.82rem', color: '#888' }}>
+            [DEBUG] job_id: <code>{debugJobId}</code>
+          </span>
+          <button onClick={handleLoadDebugJob} disabled={busy} style={{ ...primaryBtn, marginLeft: '1rem' }}>
+            Load Results
+          </button>
+        </section>
+      )}
 
       <div style={card}>
         <form onSubmit={handleSearch}>
@@ -243,6 +404,9 @@ export default function Leads() {
                                 </span>
                               )}
                             </div>
+                            <div style={{ fontSize: '0.7rem', color: '#aaa', fontFamily: 'monospace', marginTop: '0.15rem' }}>
+                              id: {lead.id}
+                            </div>
                           </td>
                           <td style={td}>{lead.title || '—'}</td>
                           <td style={td}>{lead.company || '—'}</td>
@@ -265,6 +429,22 @@ export default function Leads() {
                               style={{ ...smallBtn, marginBottom: '0.35rem' }}
                             >
                               {threadExpanded[lead.id] ? 'Hide Thread' : 'Thread'}
+                            </button>
+                            <button
+                              onClick={() => simulateReply(lead.id)}
+                              style={{ ...smallBtn, marginBottom: '0.35rem' }}
+                            >
+                              Simulate Reply
+                            </button>
+                            <button
+                              onClick={() =>
+                                apiGet(`/leads/${lead.id}/replies`)
+                                  .then(r => console.log('[Test Fetch Replies]', lead.id, r))
+                                  .catch(e => console.error('[Test Fetch Replies] error', e))
+                              }
+                              style={{ ...smallBtn, marginBottom: '0.35rem' }}
+                            >
+                              Test Fetch Replies
                             </button>
                             {!a?.open ? (
                               <button

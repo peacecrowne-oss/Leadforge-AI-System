@@ -2,15 +2,60 @@ import { useState, useEffect } from 'react'
 import { apiGet } from '../lib/api'
 import ReplyThread from '../components/ReplyThread'
 
+// The job whose leads are checked for replies.
+// Change this to any completed job_id to load a different import's conversations.
+const JOB_ID = "063b0afb-cd3e-431f-94c6-0c188896cc27"
+
 export default function Inbox() {
-  const [items, setItems] = useState([])
-  const [status, setStatus] = useState('loading') // loading | done | error
-  const [expanded, setExpanded] = useState(null)  // lead_id of open thread
+  const [threads, setThreads]   = useState([])
+  const [status, setStatus]     = useState('loading') // loading | done | error
+  const [expanded, setExpanded] = useState(null)       // lead_id of open thread
 
   useEffect(() => {
-    apiGet('/inbox')
-      .then(data => { setItems(data); setStatus('done') })
-      .catch(() => setStatus('error'))
+    async function loadThreads() {
+      try {
+        // Step 1: fetch all leads for the job.
+        const { results: leads } = await apiGet(`/leads/jobs/${JOB_ID}/results`)
+
+        // Step 2: fetch replies for every lead in parallel.
+        // A failed per-lead call resolves to [] so one bad lead doesn't abort all.
+        const replyLists = await Promise.all(
+          leads.map(lead => apiGet(`/leads/${lead.id}/replies`).catch(() => []))
+        )
+
+        // Step 3: build thread objects — only for leads that have replies.
+        const built = []
+        for (let i = 0; i < leads.length; i++) {
+          const replies = replyLists[i]
+          if (!replies || replies.length === 0) continue
+
+          // Sort replies newest-first to find the latest one.
+          const sorted = [...replies].sort(
+            (a, b) => b.created_at.localeCompare(a.created_at)
+          )
+          const latest = sorted[0]
+
+          built.push({
+            lead_id:          leads[i].id,
+            name:             leads[i].full_name,
+            latest_body:      latest.body,
+            latest_direction: latest.direction,
+            latest_at:        latest.created_at,
+            reply_count:      replies.length,
+          })
+        }
+
+        // Sort threads newest-first by their latest reply.
+        built.sort((a, b) => b.latest_at.localeCompare(a.latest_at))
+
+        setThreads(built)
+        setStatus('done')
+      } catch {
+        setStatus('error')
+      }
+    }
+
+    loadThreads()
   }, [])
 
   function toggleThread(leadId) {
@@ -19,41 +64,41 @@ export default function Inbox() {
 
   if (status === 'loading') return <p style={meta}>Loading inbox…</p>
   if (status === 'error')   return <p style={{ ...meta, color: '#c62828' }}>Failed to load inbox.</p>
-  if (items.length === 0)   return <p style={meta}>No conversations yet. Replies will appear here once leads respond.</p>
+  if (threads.length === 0) return <p style={meta}>No conversations yet. Replies will appear here once leads respond.</p>
 
   return (
     <div>
       <h1 style={{ marginTop: 0 }}>Inbox</h1>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-        {items.map(item => (
-          <div key={item.lead_id} style={card}>
+        {threads.map(thread => (
+          <div key={thread.lead_id} style={card}>
             <button
-              onClick={() => toggleThread(item.lead_id)}
+              onClick={() => toggleThread(thread.lead_id)}
               style={rowBtn}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
-                <span style={avatar}>{(item.full_name || '?')[0].toUpperCase()}</span>
+                <span style={avatar}>{(thread.name || '?')[0].toUpperCase()}</span>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-                    {item.full_name || 'Unknown Lead'}
+                    {thread.name || 'Unknown Lead'}
                   </div>
                   <div style={preview}>
-                    {item.latest_direction === 'inbound' ? '← ' : '→ '}
-                    {item.latest_body.length > 80
-                      ? item.latest_body.slice(0, 80) + '…'
-                      : item.latest_body}
+                    {thread.latest_direction === 'inbound' ? '← ' : '→ '}
+                    {thread.latest_body.length > 80
+                      ? thread.latest_body.slice(0, 80) + '…'
+                      : thread.latest_body}
                   </div>
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem', flexShrink: 0 }}>
-                <span style={timestamp}>{new Date(item.latest_at).toLocaleString()}</span>
-                <span style={badge}>{item.reply_count} {item.reply_count === 1 ? 'reply' : 'replies'}</span>
+                <span style={timestamp}>{new Date(thread.latest_at).toLocaleString()}</span>
+                <span style={badge}>{thread.reply_count} {thread.reply_count === 1 ? 'reply' : 'replies'}</span>
               </div>
             </button>
 
-            {expanded === item.lead_id && (
+            {expanded === thread.lead_id && (
               <div style={{ borderTop: '1px solid #eee', padding: '0.75rem 1rem' }}>
-                <ReplyThread leadId={item.lead_id} />
+                <ReplyThread leadId={thread.lead_id} />
               </div>
             )}
           </div>

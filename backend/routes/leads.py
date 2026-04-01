@@ -9,7 +9,7 @@ Imports:
   db.sqlite → persistence helpers (no project cycle)
   services  → business logic (no project cycle)
 """
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Response, UploadFile
 from datetime import datetime, timezone
 import json
 import csv
@@ -18,9 +18,11 @@ import uuid
 
 from models import LeadSearchRequest, Lead, SearchJob
 from services.search_service import simulate_provider_search
+from services.apollo_service import fetch_apollo_leads
+from services.scoring_service import score_lead
 from auth.dependencies import get_current_user
 from core.feature_flags import get_plan_features
-from db.sqlite import db_save_job, db_get_job, db_load_results
+from db.sqlite import db_connect, db_save_job, db_get_job, db_load_results, db_save_results
 from state import JOBS, JOB_OWNERS, RESULTS
 
 router = APIRouter()
@@ -139,6 +141,209 @@ def get_job_results(
         "count": len(all_results),
         "offset": offset,
         "limit": limit,
+    }
+
+
+@router.post("/leads/import/apollo", status_code=201)
+def import_apollo_leads(
+    request: LeadSearchRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Fetch leads from Apollo.io and store them as a completed search job.
+
+    Synchronous — Apollo returns results in one HTTP call, so no background
+    task is needed. The job is written with status='complete' immediately.
+    The resulting job_id can be used with the standard /jobs/{id}/results
+    and /jobs/{id}/export.csv endpoints without any changes.
+    """
+    user_id = current_user["user_id"]
+
+    # ── Call Apollo ───────────────────────────────────────────────────────────
+    try:
+        raw_leads = fetch_apollo_leads({
+            "keywords": request.keywords,
+            "title":    request.title,
+            "location": request.location,
+            "company":  request.company,
+            "limit":    request.limit,
+        })
+    except ValueError as exc:
+        # Missing API key or bad configuration — caller's fault.
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        # Apollo returned an error or network failed — upstream fault.
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    # ── Normalise apollo dicts → Lead models and score each ───────────────────
+    leads: list[Lead] = []
+    for raw in raw_leads:
+        lead = Lead(
+            id=str(uuid.uuid4()),
+            full_name=raw.get("name") or "Unknown",
+            title=raw.get("title"),
+            company=raw.get("company"),
+            location=raw.get("location"),
+            email=raw.get("email"),
+        )
+        computed_score, explanation = score_lead(lead, request)
+        leads.append(lead.model_copy(update={
+            "score": computed_score,
+            "score_explanation": explanation,
+        }))
+
+    # ── Create a completed job and persist ────────────────────────────────────
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    job = SearchJob(
+        job_id=job_id,
+        status="complete",
+        created_at=now,
+        updated_at=now,
+        request=request,
+        results_count=len(leads),
+    )
+
+    JOBS[job_id] = job
+    RESULTS[job_id] = leads
+    JOB_OWNERS[job_id] = user_id
+
+    db_save_job(job, user_id=user_id)
+    db_save_results(job_id, leads)
+
+    return {
+        "job_id":   job_id,
+        "imported": len(leads),
+        "sample":   leads[:3],
+    }
+
+
+@router.post("/leads/import/csv", status_code=201)
+def import_csv_leads(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Parse an uploaded CSV file and store the rows as a completed search job.
+
+    Expected CSV columns (case-insensitive, extra columns ignored):
+        Name, Title, Company, Email, Location
+
+    The job is written with status='complete' immediately — no background task.
+    The resulting job_id works with /jobs/{id}/results and /jobs/{id}/export.csv
+    without any changes to those endpoints.
+    """
+    user_id = current_user["user_id"]
+
+    # ── Read and decode the uploaded file ────────────────────────────────────
+    raw_bytes = file.file.read()
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw_bytes.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+
+    # Normalise header names to lowercase so "Name", "name", "NAME" all work.
+    if reader.fieldnames is None:
+        raise HTTPException(status_code=400, detail="CSV file is empty or has no header row.")
+    reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
+
+    # ── Parse rows → Lead models ──────────────────────────────────────────────
+    # An empty LeadSearchRequest gives neutral (0.5) scores for all filter
+    # factors; seniority from the job title still ranks leads meaningfully.
+    score_context = LeadSearchRequest()
+    leads: list[Lead] = []
+
+    # Query existing emails from DB once before the loop (cross-import dedup).
+    with db_connect() as conn:
+        db_rows = conn.execute(
+            "SELECT DISTINCT lower(trim(email)) FROM job_leads WHERE email IS NOT NULL"
+        ).fetchall()
+    existing_emails: set[str] = {r[0] for r in db_rows}
+
+    # Tracks emails seen within this CSV (within-file dedup).
+    seen_emails: set[str] = set()
+    skipped = 0
+
+    for row in reader:
+        # Name: Apollo exports "First Name" / "Last Name"; generic exports use "Name".
+        first = (row.get("first name") or "").strip()
+        last  = (row.get("last name")  or "").strip()
+        if first or last:
+            name = " ".join(part for part in [first, last] if part)
+        else:
+            name = (row.get("name") or "").strip()
+
+        # Skip rows where no name could be resolved at all.
+        if not name:
+            continue
+
+        # Company: Apollo uses "Company Name"; generic exports use "Company".
+        company = (
+            (row.get("company name") or row.get("company") or "").strip() or None
+        )
+
+        # Location: Apollo provides city and state separately; generic exports
+        # provide a single "Location" column.
+        city  = (row.get("company city")  or "").strip()
+        state = (row.get("company state") or "").strip()
+        if city or state:
+            location = ", ".join(part for part in [city, state] if part)
+        else:
+            location = (row.get("location") or "").strip() or None
+
+        title = (row.get("title") or "").strip() or None
+        email = (row.get("email") or "").strip().lower() or None
+
+        # Dedup: skip if email seen in this file or already in the DB.
+        # Leads with no email cannot be deduped — allow them through.
+        if email:
+            if email in seen_emails or email in existing_emails:
+                skipped += 1
+                continue
+            seen_emails.add(email)
+
+        lead = Lead(
+            id=str(uuid.uuid4()),
+            full_name=name or "Unknown",
+            title=title,
+            company=company,
+            email=email,
+            location=location,
+        )
+        computed_score, explanation = score_lead(lead, score_context)
+        leads.append(lead.model_copy(update={
+            "score": computed_score,
+            "score_explanation": explanation,
+        }))
+
+    print(f"Imported {len(leads)} leads, skipped {skipped} duplicates")
+
+    if not leads:
+        raise HTTPException(status_code=422, detail="No valid lead rows found in the CSV.")
+
+    # ── Create a completed job and persist ────────────────────────────────────
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    job = SearchJob(
+        job_id=job_id,
+        status="complete",
+        created_at=now,
+        updated_at=now,
+        request=score_context,
+        results_count=len(leads),
+    )
+
+    JOBS[job_id] = job
+    RESULTS[job_id] = leads
+    JOB_OWNERS[job_id] = user_id
+
+    db_save_job(job, user_id=user_id)
+    db_save_results(job_id, leads)
+
+    return {
+        "job_id":   job_id,
+        "imported": len(leads),
+        "skipped":  skipped,
     }
 
 
