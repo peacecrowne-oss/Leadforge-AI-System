@@ -33,6 +33,7 @@ export default function Leads() {
   const [nlQuery, setNlQuery] = useState('')
   const [nlParsed, setNlParsed] = useState(null)
   const [jobs, setJobs] = useState([])   // recent job history (persisted in localStorage)
+  const [showImports, setShowImports] = useState(true)
   const intervalRef = useRef(null)
 
   // Client-side derived view — filter then sort; original `leads` is never mutated.
@@ -329,9 +330,14 @@ export default function Leads() {
 
       {jobs.length > 0 && (
         <section style={{ ...card, marginBottom: '1rem' }}>
-          <h3 style={{ marginTop: 0 }}>Recent Imports</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ marginTop: 0 }}>Recent Imports</h3>
+            <button onClick={() => setShowImports(v => !v)}>
+              {showImports ? 'Hide' : 'Show'}
+            </button>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-            {jobs.map(j => (
+            {showImports && jobs.map(j => (
               <button
                 key={j.job_id}
                 onClick={() => handleLoadJob(j.job_id)}
@@ -358,6 +364,7 @@ export default function Leads() {
                 </span>
               </button>
             ))}
+
           </div>
         </section>
       )}
