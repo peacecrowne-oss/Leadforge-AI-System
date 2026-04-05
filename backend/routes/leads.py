@@ -14,7 +14,10 @@ from datetime import datetime, timezone
 import json
 import csv
 import io
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 
 from models import LeadSearchRequest, Lead, SearchJob
 from services.search_service import simulate_provider_search
@@ -100,6 +103,46 @@ def create_search_job(request: LeadSearchRequest, background_tasks: BackgroundTa
     # JOBS and RESULTS are passed into the service to avoid circular imports.
     background_tasks.add_task(simulate_provider_search, job_id, JOBS, RESULTS)
     return {"job_id": job_id}
+
+
+@router.get("/leads/jobs")
+def list_jobs(current_user: dict = Depends(get_current_user)):
+    """Return all jobs owned by the current user, newest first."""
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT job_id, status, results_count, created_at
+            FROM jobs
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            """,
+            (current_user["user_id"],),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@router.get("/leads/jobs/latest")
+def get_latest_job(current_user: dict = Depends(get_current_user)):
+    """Return the most recent job for the current user."""
+    with db_connect() as conn:
+        row = conn.execute(
+            """
+            SELECT job_id, status, created_at, results_count
+            FROM jobs
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (current_user["user_id"],),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No jobs found")
+    return {
+        "job_id":       row["job_id"],
+        "status":       row["status"],
+        "created_at":   row["created_at"],
+        "result_count": row["results_count"],
+    }
 
 
 @router.get("/leads/jobs/{job_id}", response_model=SearchJob)
@@ -263,8 +306,17 @@ def import_csv_leads(
     # Tracks emails seen within this CSV (within-file dedup).
     seen_emails: set[str] = set()
     skipped = 0
+    row_num = 0
 
     for row in reader:
+        row_num += 1
+        logger.debug("Row %d raw: %s", row_num, dict(row))
+
+        # Skip repeated header rows embedded in the file body.
+        if row.get("first name") == "first name" or row.get("email") == "email":
+            logger.debug("Row %d skipped: repeated header row", row_num)
+            continue
+
         # Name: Apollo exports "First Name" / "Last Name"; generic exports use "Name".
         first = (row.get("first name") or "").strip()
         last  = (row.get("last name")  or "").strip()
@@ -275,6 +327,8 @@ def import_csv_leads(
 
         # Skip rows where no name could be resolved at all.
         if not name:
+            logger.debug("Row %d skipped: no name found (first=%r last=%r name=%r)",
+                         row_num, first, last, row.get("name"))
             continue
 
         # Company: Apollo uses "Company Name"; generic exports use "Company".
@@ -297,7 +351,12 @@ def import_csv_leads(
         # Dedup: skip if email seen in this file or already in the DB.
         # Leads with no email cannot be deduped — allow them through.
         if email:
-            if email in seen_emails or email in existing_emails:
+            if email in seen_emails:
+                logger.debug("Row %d skipped: duplicate email within file (%s)", row_num, email)
+                skipped += 1
+                continue
+            if email in existing_emails:
+                logger.debug("Row %d skipped: email already in DB (%s)", row_num, email)
                 skipped += 1
                 continue
             seen_emails.add(email)
@@ -315,8 +374,10 @@ def import_csv_leads(
             "score": computed_score,
             "score_explanation": explanation,
         }))
+        logger.debug("Row %d accepted: name=%r email=%r", row_num, name, email)
 
-    print(f"Imported {len(leads)} leads, skipped {skipped} duplicates")
+    logger.info("CSV import complete — total rows: %d, inserted: %d, skipped: %d",
+                row_num, len(leads), skipped)
 
     if not leads:
         raise HTTPException(status_code=422, detail="No valid lead rows found in the CSV.")

@@ -170,6 +170,30 @@ export default function Campaigns() {
 }
 
 function CampaignRow({ campaign: c, stat, isRunning, onRun, onStats, onGenerateMessage, generatedMessage, onMessageChange, onSaveMessage }) {
+  const [showMessage, setShowMessage] = useState(true)
+  const [showStats, setShowStats]     = useState(true)
+
+  const handleSendMessage = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/messages/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({
+          campaign_id: c.id,
+          message: generatedMessage,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to send message')
+      alert('Message sent successfully')
+    } catch (err) {
+      console.error(err)
+      alert('Failed to send message')
+    }
+  }
+
   return (
     <>
       <tr style={{ borderBottom: stat ? 'none' : '1px solid #eee' }}>
@@ -188,9 +212,12 @@ function CampaignRow({ campaign: c, stat, isRunning, onRun, onStats, onGenerateM
           </div>
         </td>
       </tr>
-      {generatedMessage && (
+      {generatedMessage && showMessage && (
         <tr style={{ borderBottom: '1px solid #eee', background: '#fffde7' }}>
           <td colSpan={4} style={{ padding: '0.5rem 0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowMessage(false)} style={smallBtn}>✕</button>
+            </div>
             <div style={{ marginTop: '10px' }}>
               <textarea
                 value={generatedMessage}
@@ -198,13 +225,17 @@ function CampaignRow({ campaign: c, stat, isRunning, onRun, onStats, onGenerateM
                 style={{ width: '100%', height: '120px', padding: '8px' }}
               />
               <button onClick={onSaveMessage} style={{ marginTop: '6px' }}>Save Message</button>
+              <button onClick={handleSendMessage} style={{ marginTop: '6px', marginLeft: '0.5rem' }}>Send Message</button>
             </div>
           </td>
         </tr>
       )}
-      {stat && (
+      {stat && showStats && (
         <tr style={{ borderBottom: '1px solid #eee', background: '#f9f9f9' }}>
           <td colSpan={4} style={{ padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowStats(false)} style={smallBtn}>✕</button>
+            </div>
             <StatsRow stat={stat} />
           </td>
         </tr>

@@ -28,13 +28,28 @@ export default function Leads() {
   const [threadExpanded, setThreadExpanded] = useState({}) // { [lead_id]: bool }
   const [sortOrder, setSortOrder] = useState('desc')     // 'desc' | 'asc'
   const [minScore, setMinScore] = useState(0)
+  const [clientKeyword, setClientKeyword] = useState('')
+  const [showLatestOnly, setShowLatestOnly] = useState(false)
   const [nlQuery, setNlQuery] = useState('')
   const [nlParsed, setNlParsed] = useState(null)
   const [jobs, setJobs] = useState([])   // recent job history (persisted in localStorage)
   const intervalRef = useRef(null)
 
   // Client-side derived view — filter then sort; original `leads` is never mutated.
+  const kw = clientKeyword.toLowerCase()
+  const latestJobId = showLatestOnly
+    ? (leads.reduce((best, l) =>
+        !best || (l.created_at || '') > (best.created_at || '') ? l : best
+      , null)?.job_id ?? null)
+    : null
   const displayLeads = leads
+    .filter(l => !showLatestOnly || !latestJobId || l.job_id === latestJobId)
+    .filter(l =>
+      !kw ||
+      (l.full_name  || '').toLowerCase().includes(kw) ||
+      (l.title      || '').toLowerCase().includes(kw) ||
+      (l.company    || '').toLowerCase().includes(kw)
+    )
     .filter(l => (l.score ?? 0) >= minScore)
     .sort((a, b) =>
       sortOrder === 'desc'
@@ -68,6 +83,40 @@ export default function Leads() {
       })
     }
   }, [phase, jobId, leads.length])
+
+  // Poll /leads/jobs/latest every 4 s. If a new job_id appears (e.g. auto_import_csv
+  // ran externally), load its results automatically — but only when the component is
+  // not already mid-search so we don't race with startPoll.
+  const latestJobPollRef = useRef(null)
+  const lastSeenJobId    = useRef(null)
+  const lastSeenStatus   = useRef(null)
+
+  useEffect(() => {
+    const BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+
+    latestJobPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${BASE}/leads/jobs/latest`, {
+          headers: { Authorization: `Bearer ${getToken()}` },
+        })
+        if (!res.ok) return
+        const data = await res.json()
+
+        const idle = phase === 'idle' || phase === 'done' || phase === 'error'
+        const jobChanged  = data.job_id !== lastSeenJobId.current
+        const nowComplete = data.status === 'complete' && lastSeenStatus.current !== 'complete'
+
+        if (idle && (jobChanged || nowComplete)) {
+          handleLoadJob(data.job_id)
+        }
+
+        lastSeenJobId.current  = data.job_id
+        lastSeenStatus.current = data.status
+      } catch {}
+    }, 4000)
+
+    return () => clearInterval(latestJobPollRef.current)
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }))
 
@@ -347,6 +396,19 @@ export default function Leads() {
         <>
           {/* ── Score controls ── */}
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
+            <button onClick={() => setShowLatestOnly(v => !v)} style={smallBtn}>
+              {showLatestOnly ? 'Show All' : 'Show Latest Only'}
+            </button>
+            <label style={ctrlLabel}>
+              Filter results:
+              <input
+                type="text"
+                value={clientKeyword}
+                onChange={e => setClientKeyword(e.target.value)}
+                placeholder="name, title, or company"
+                style={{ ...ctrlSelect, width: '14rem' }}
+              />
+            </label>
             <label style={ctrlLabel}>
               Sort:
               <select value={sortOrder} onChange={e => setSortOrder(e.target.value)} style={ctrlSelect}>
