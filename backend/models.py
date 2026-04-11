@@ -30,6 +30,7 @@ class Lead(BaseModel):
     linkedin_url: str | None = None
     score: float | None = None
     score_explanation: dict | None = None
+    variant: str | None = None
 
 
 class SearchJob(BaseModel):
@@ -127,6 +128,7 @@ class ExperimentCreate(BaseModel):
 class ExperimentVariantCreate(BaseModel):
     name: str
     traffic_percentage: int = Field(ge=0, le=100)
+    message: str | None = None
 
 
 class ExperimentVariantResponse(BaseModel):
@@ -135,6 +137,7 @@ class ExperimentVariantResponse(BaseModel):
     name: str
     traffic_percentage: int
     created_at: str
+    message: str | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -159,6 +162,7 @@ class ExperimentWinnerResponse(BaseModel):
     winning_variant_id: str | None
     winning_variant_name: str | None
     basis: str
+    confidence: str | None = None  # "low" | "medium" | "high"; None when no winner
 
 
 # ── Reply models ──────────────────────────────────────────────────────────────

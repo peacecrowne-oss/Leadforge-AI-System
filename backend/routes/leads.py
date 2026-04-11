@@ -25,7 +25,7 @@ from services.apollo_service import fetch_apollo_leads
 from services.scoring_service import score_lead
 from auth.dependencies import get_current_user
 from core.feature_flags import get_plan_features
-from db.sqlite import db_connect, db_save_job, db_get_job, db_load_results, db_save_results
+from db.sqlite import db_connect, db_save_job, db_get_job, db_load_results, db_save_results, db_get_variants_for_leads
 from state import JOBS, JOB_OWNERS, RESULTS
 
 router = APIRouter()
@@ -177,6 +177,9 @@ def get_job_results(
     )
 
     paged = sorted_results[offset : offset + limit]
+
+    variants = db_get_variants_for_leads([lead.id for lead in paged])
+    paged = [lead.model_copy(update={"variant": variants.get(lead.id)}) for lead in paged]
 
     return {
         "job_id": job_id,

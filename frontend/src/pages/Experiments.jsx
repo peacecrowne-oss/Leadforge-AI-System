@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { apiGet, apiPost, getUserPlan } from '../lib/api'
+import { apiGet, apiPost, apiDelete, getUserPlan } from '../lib/api'
 
 export default function Experiments() {
   const plan = getUserPlan()
@@ -13,12 +13,33 @@ export default function Experiments() {
   const [winnerResults, setWinnerResults] = useState({})   // { [experimentId]: winner result }
   const [metricsResults, setMetricsResults] = useState({}) // { [experimentId]: metrics list }
   const [loadingResults, setLoadingResults] = useState({}) // { [experimentId]: boolean }
+  const [selectedExperiments, setSelectedExperiments] = useState([])
+  const [undoState, setUndoState] = useState({ items: [], visible: false })
+  const [expandedExperiments, setExpandedExperiments] = useState({})
+  const [variantTemplates, setVariantTemplates] = useState([])
+  const [variantForm, setVariantForm] = useState({
+    experimentId: null,
+    name: '',
+    message: '',
+    traffic_percentage: 50,
+    visible: false,
+  })
 
   useEffect(() => {
-    if (plan !== 'enterprise') return
+    apiGet('/experiments/variant-templates')
+      .then(setVariantTemplates)
+      .catch(console.error)
+  }, [])
+
+  function fetchExperiments() {
     apiGet('/experiments')
       .then(data => setExperiments(data))
       .catch(err => setError(err.message))
+  }
+
+  useEffect(() => {
+    if (plan !== 'enterprise') return
+    fetchExperiments()
     apiGet('/campaigns')
       .then(data => setCampaigns(data))
       .catch(() => {})
@@ -64,6 +85,40 @@ export default function Experiments() {
     }
   }
 
+  async function handleDeleteSelected() {
+    if (selectedExperiments.length === 0) return
+
+    const confirmed = window.confirm("Are you sure you want to delete selected experiments?")
+    if (!confirmed) return
+
+    // Store backup for undo
+    const deleted = experiments.filter(exp => selectedExperiments.includes(exp.id))
+
+    for (const id of selectedExperiments) {
+      await apiDelete(`/experiments/${id}`)
+    }
+
+    setSelectedExperiments([])
+    fetchExperiments()
+
+    // Show undo option
+    setUndoState({ items: deleted, visible: true })
+
+    // Auto-hide undo after 5 seconds
+    setTimeout(() => {
+      setUndoState({ items: [], visible: false })
+    }, 5000)
+  }
+
+  async function handleUndoDelete() {
+    for (const exp of undoState.items) {
+      await apiPost('/experiments', exp)
+    }
+    fetchExperiments()
+    setUndoState({ items: [], visible: false })
+  }
+
+
   async function handleRun(experimentId) {
     const campaignId = selectedCampaign[experimentId]
     if (!campaignId) {
@@ -97,9 +152,18 @@ export default function Experiments() {
       <div style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
           <h3 style={{ margin: 0 }}>All Experiments</h3>
-          <button onClick={() => setShowForm(f => !f)} style={smallBtn}>
-            {showForm ? 'Cancel' : 'New Experiment'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={handleDeleteSelected}
+              disabled={selectedExperiments.length === 0}
+              style={smallBtn}
+            >
+              Delete Selected
+            </button>
+            <button onClick={() => setShowForm(f => !f)} style={smallBtn}>
+              {showForm ? 'Cancel' : 'New Experiment'}
+            </button>
+          </div>
         </div>
 
         {showForm && (
@@ -127,10 +191,20 @@ export default function Experiments() {
           <p style={{ color: '#888' }}>No experiments found.</p>
         )}
 
+        {undoState.visible && (
+          <div style={{ background: '#222', color: '#fff', padding: '10px', marginBottom: '10px', borderRadius: 4 }}>
+            Experiments deleted
+            <button onClick={handleUndoDelete} style={{ marginLeft: '10px' }}>
+              Undo
+            </button>
+          </div>
+        )}
+
         {experiments !== null && experiments.length > 0 && (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
             <thead>
               <tr style={{ background: '#f0f0f0' }}>
+                <th style={th}></th>
                 {['ID', 'Name', 'Status', 'Created', 'Result', 'Actions'].map(h => (
                   <th key={h} style={th}>{h}</th>
                 ))}
@@ -139,6 +213,19 @@ export default function Experiments() {
             <tbody>
               {experiments.map(exp => (
                 <tr key={exp.id} style={{ borderBottom: '1px solid #eee' }}>
+                  <td style={td}>
+                    <input
+                      type="checkbox"
+                      checked={selectedExperiments.includes(exp.id)}
+                      onChange={() => {
+                        setSelectedExperiments(prev =>
+                          prev.includes(exp.id)
+                            ? prev.filter(id => id !== exp.id)
+                            : [...prev, exp.id]
+                        )
+                      }}
+                    />
+                  </td>
                   <td style={td}>
                     <span
                       title="Click to copy ID"
@@ -159,14 +246,63 @@ export default function Experiments() {
                   </td>
                   <td style={td}>{new Date(exp.created_at).toLocaleDateString()}</td>
                   <td style={td}>
-                    {exp.status === 'completed' && exp.winning_variant_id
-                      ? <span>Winner: {exp.winning_variant_id.slice(0, 8)}…<br /><span style={{ color: '#888', fontSize: '0.8rem' }}>({exp.winner_basis})</span></span>
-                      : <span style={{ color: '#aaa' }}>—</span>
-                    }
+                    <div style={{ marginBottom: '0.35rem' }}>
+                      <button
+                        onClick={() => {
+                          setExpandedExperiments(prev => ({ ...prev, [exp.id]: !prev[exp.id] }))
+                          if (!winnerResults[exp.id]) fetchWinner(exp.id)
+                        }}
+                        disabled={loadingResults[exp.id]}
+                        style={smallBtn}
+                      >
+                        {loadingResults[exp.id] ? 'Loading...' : expandedExperiments[exp.id] ? 'Collapse' : 'View Result'}
+                      </button>
+                    </div>
+                    {expandedExperiments[exp.id] && winnerResults[exp.id] ? (
+                      <div>
+                        <div><strong>{winnerResults[exp.id].winning_variant_name || 'No winner'}</strong></div>
+                        <div style={{ fontSize: '0.75rem', color: '#666' }}>
+                          {winnerResults[exp.id].confidence || ''}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '0.15rem' }}>
+                          {winnerResults[exp.id].basis}
+                        </div>
+                      </div>
+                    ) : (!expandedExperiments[exp.id] ? '—' : null)}
+                    {expandedExperiments[exp.id] && metricsResults[exp.id] && (
+                      <table style={{ marginTop: '0.5rem', borderCollapse: 'collapse', fontSize: '0.82rem', width: '100%' }}>
+                        <thead>
+                          <tr style={{ background: '#f0f0f0' }}>
+                            <th style={th}>Variant</th>
+                            <th style={th}>Exposures</th>
+                            <th style={th}>Campaigns</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {metricsResults[exp.id].map(m => (
+                            <tr key={m.variant_id} style={{ borderBottom: '1px solid #eee' }}>
+                              <td style={td}>{m.variant_name}</td>
+                              <td style={td}>{m.exposures}</td>
+                              <td style={td}>{m.distinct_campaigns}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </td>
                   <td style={td}>
                     {exp.status !== 'completed' && (
                       <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() => setVariantForm({
+                            experimentId: exp.id,
+                            name: '',
+                            message: '',
+                            traffic_percentage: 50,
+                            visible: true,
+                          })}
+                          style={smallBtn}
+                        >Add Variant</button>
                         <select
                           value={selectedCampaign[exp.id] || ''}
                           onChange={e => setSelectedCampaign(prev => ({ ...prev, [exp.id]: e.target.value }))}
@@ -186,28 +322,86 @@ export default function Experiments() {
                         {runFeedback[exp.id]}
                       </div>
                     )}
-                    <div style={{ marginTop: '0.35rem' }}>
-                      <button onClick={() => fetchWinner(exp.id)} disabled={loadingResults[exp.id]} style={smallBtn}>
-                        {loadingResults[exp.id] ? 'Loading...' : 'View Result'}
-                      </button>
-                      {winnerResults[exp.id] && (
-                        <div>
-                          {winnerResults[exp.id].winning_variant_id ? (
-                            <>
-                              Winner: {winnerResults[exp.id].winning_variant_id.slice(0, 8)}…
-                              <br />
-                              ({winnerResults[exp.id].basis})
-                              {metricsResults[exp.id] && (() => {
-                                const m = metricsResults[exp.id].find(x => x.variant_id === winnerResults[exp.id].winning_variant_id)
-                                return m ? <><br />Exposures: {m.exposures}</> : null
-                              })()}
-                            </>
-                          ) : (
-                            winnerResults[exp.id].basis
-                          )}
+                    {variantForm.visible && variantForm.experimentId === exp.id && (
+                      <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                          {variantTemplates.map(t => (
+                            <button
+                              key={t.name}
+                              onClick={() => setVariantForm(prev => ({ ...prev, name: t.name, message: t.message }))}
+                              style={smallBtn}
+                            >
+                              {t.name}
+                            </button>
+                          ))}
                         </div>
-                      )}
-                    </div>
+                        <input
+                          value={variantForm.name}
+                          placeholder="Variant name"
+                          onChange={e => setVariantForm(prev => ({ ...prev, name: e.target.value }))}
+                          style={{ padding: '0.3rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem' }}
+                        />
+                        <div style={{ marginBottom: '0.5rem' }}>
+                          <button
+                            onClick={() => setVariantForm(prev => ({
+                              ...prev,
+                              name: 'Variant A',
+                              message: 'Hi, quick question — are you currently looking for more leads?'
+                            }))}
+                            style={smallBtn}
+                          >
+                            Use Variant A
+                          </button>
+                          <button
+                            onClick={() => setVariantForm(prev => ({
+                              ...prev,
+                              name: 'Variant B',
+                              message: 'Hi, I help businesses like yours generate qualified leads automatically. Open to a quick chat?'
+                            }))}
+                            style={{ ...smallBtn, marginLeft: '0.4rem' }}
+                          >
+                            Use Variant B
+                          </button>
+                        </div>
+                        <textarea
+                          value={variantForm.message}
+                          placeholder="Message"
+                          rows={3}
+                          onChange={e => setVariantForm(prev => ({ ...prev, message: e.target.value }))}
+                          style={{ padding: '0.3rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', resize: 'vertical' }}
+                        />
+                        <input
+                          type="number"
+                          value={variantForm.traffic_percentage}
+                          min={0}
+                          max={100}
+                          onChange={e => setVariantForm(prev => ({ ...prev, traffic_percentage: Number(e.target.value) }))}
+                          style={{ padding: '0.3rem', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.85rem', width: '80px' }}
+                        />
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await apiPost(`/experiments/${variantForm.experimentId}/variants`, {
+                                  name: variantForm.name,
+                                  message: variantForm.message,
+                                  traffic_percentage: variantForm.traffic_percentage,
+                                })
+                                setVariantForm({ ...variantForm, visible: false })
+                                fetchExperiments()
+                              } catch (err) {
+                                setError(err.message)
+                              }
+                            }}
+                            style={smallBtn}
+                          >Save Variant</button>
+                          <button
+                            onClick={() => setVariantForm(prev => ({ ...prev, visible: false }))}
+                            style={smallBtn}
+                          >Cancel</button>
+                        </div>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

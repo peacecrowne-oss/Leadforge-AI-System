@@ -178,9 +178,22 @@ export default function Leads() {
     setLeads([])
     try {
       const res = await apiGet(`/leads/jobs/${jid}/results`)
-      setLeads(res.results || [])
+      const results = res.results || []
+      setLeads(results)
       setJobId(jid)
       setPhase('done')
+      // Persist to Recent Imports sidebar (same format as the manual search useEffect).
+      setJobs(prev => {
+        if (prev.find(j => j.job_id === jid)) return prev
+        const entry = {
+          job_id:        jid,
+          results_count: results.length,
+          created_at:    new Date().toISOString(),
+        }
+        const updated = [entry, ...prev].slice(0, 10)
+        localStorage.setItem('leadforge_jobs', JSON.stringify(updated))
+        return updated
+      })
     } catch (err) {
       setError(err.message)
       setPhase('error')
@@ -447,7 +460,7 @@ export default function Leads() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ background: '#f0f0f0' }}>
-                    {['Name', 'Title', 'Company', 'Location', 'Score', 'Action'].map(h => (
+                    {['Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Variant', 'Action'].map(h => (
                       <th key={h} style={th}>{h}</th>
                     ))}
                   </tr>
@@ -479,6 +492,7 @@ export default function Leads() {
                           </td>
                           <td style={td}>{lead.title || '—'}</td>
                           <td style={td}>{lead.company || '—'}</td>
+                          <td style={td}>{lead.email || '—'}</td>
                           <td style={td}>{lead.location || '—'}</td>
                           <td style={td}>
                             <button
@@ -492,6 +506,7 @@ export default function Leads() {
                               </span>
                             </button>
                           </td>
+                          <td style={td}>{lead.variant || '—'}</td>
                           <td style={td}>
                             <button
                               onClick={() => setThreadExpanded(t => ({ ...t, [lead.id]: !t[lead.id] }))}
@@ -551,14 +566,14 @@ export default function Leads() {
                         </tr>
                         {expanded && (
                           <tr style={{ background: '#f9f9f9', borderBottom: threadExpanded[lead.id] ? 'none' : '1px solid #eee' }}>
-                            <td colSpan={6} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
+                            <td colSpan={9} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
                               <ScoreBreakdown explanation={lead.score_explanation} />
                             </td>
                           </tr>
                         )}
                         {threadExpanded[lead.id] && (
                           <tr style={{ background: '#fafafa', borderBottom: '1px solid #eee' }}>
-                            <td colSpan={6} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
+                            <td colSpan={9} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
                               <p style={{ margin: '0 0 0.5rem', fontSize: '0.78rem', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                                 Conversation
                               </p>

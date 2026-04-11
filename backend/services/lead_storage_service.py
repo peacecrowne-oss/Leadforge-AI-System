@@ -7,7 +7,7 @@ Schema mapping
 --------------
 job_leads column  ← pipeline field
 -----------------   ----------------
-job_id            ← generated: "pipeline_<user_id>_<uuid>"
+job_id            ← passed in by caller
 lead_id           ← lead["id"]  (generated if missing)
 full_name         ← lead["full_name"]
 title             ← lead["title"]
@@ -30,20 +30,18 @@ import uuid
 from db.sqlite import db_connect
 
 
-def store_leads(leads: list[dict], user_id: str) -> int:
+def store_leads(leads: list[dict], user_id: str, job_id: str) -> int:
     """
     Persist a list of pipeline leads for a given user.
-
-    A synthetic job_id is generated per call so each batch is isolated.
 
     Args:
         leads:   List of enriched/scored lead dicts.
         user_id: ID of the owning user.
+        job_id:  Job ID to use for all inserted rows (must match the jobs table entry).
 
     Returns:
         Number of leads actually inserted (duplicates are skipped).
     """
-    job_id = f"pipeline_{user_id}_{uuid.uuid4()}"
     now = __import__("datetime").datetime.utcnow().isoformat()
 
     rows = []

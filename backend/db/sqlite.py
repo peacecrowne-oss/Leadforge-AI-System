@@ -722,6 +722,60 @@ def db_get_experiment_metrics(experiment_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def db_get_variants_for_leads(lead_ids: list[str]) -> dict[str, str]:
+    """Return a mapping of lead_id -> variant_name for leads with experiment assignments.
+
+    Join path:
+      campaign_leads.lead_id
+        -> experiment_variant_events.campaign_id (event_type='variant_assigned')
+        -> experiment_variants.name
+
+    When a lead has multiple assignments the most-recent one wins.
+    Returns an empty dict if lead_ids is empty or none have variant assignments.
+    """
+    if not lead_ids:
+        return {}
+    placeholders = ",".join("?" * len(lead_ids))
+    with db_connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT cl.lead_id, ev.name AS variant_name
+            FROM campaign_leads cl
+            JOIN experiment_variant_events eve
+              ON eve.campaign_id = cl.campaign_id
+             AND eve.event_type = 'variant_assigned'
+            JOIN experiment_variants ev
+              ON ev.id = eve.variant_id
+            WHERE cl.lead_id IN ({placeholders})
+            ORDER BY eve.created_at DESC
+            """,
+            lead_ids,
+        ).fetchall()
+    # Keep only the most-recent assignment per lead (rows are DESC by created_at).
+    result: dict[str, str] = {}
+    for row in rows:
+        if row["lead_id"] not in result:
+            result[row["lead_id"]] = row["variant_name"]
+    return result
+
+
+def db_delete_experiment(experiment_id: str) -> bool:
+    """Delete an experiment and its variants by ID.
+
+    Returns True if a row was deleted, False if the experiment was not found.
+    """
+    with db_connect() as conn:
+        conn.execute(
+            "DELETE FROM experiment_variants WHERE experiment_id = ?",
+            (experiment_id,),
+        )
+        cursor = conn.execute(
+            "DELETE FROM experiments WHERE id = ?",
+            (experiment_id,),
+        )
+    return cursor.rowcount > 0
+
+
 # ── Replies ───────────────────────────────────────────────────────────────────
 
 def db_get_inbox(user_id: str) -> list[dict]:

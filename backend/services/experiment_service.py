@@ -66,6 +66,20 @@ def assign_variant(
     return variants[-1]
 
 
+_MIN_EXPOSURES = 5   # below this threshold no winner is declared
+_CONFIDENCE_MEDIUM = 20
+_CONFIDENCE_HIGH   = 50
+
+
+def _confidence(exposures: int) -> str:
+    """Map an exposure count to a confidence tier."""
+    if exposures >= _CONFIDENCE_HIGH:
+        return "high"
+    if exposures >= _CONFIDENCE_MEDIUM:
+        return "medium"
+    return "low"
+
+
 def evaluate_winner(
     metrics: list[ExperimentVariantMetrics],
 ) -> ExperimentWinnerResponse:
@@ -74,10 +88,11 @@ def evaluate_winner(
     Rules:
       - No variants supplied → no winner; basis explains empty input.
       - All exposures == 0   → no winner; basis = "no exposures recorded".
+      - Max exposures < _MIN_EXPOSURES → no winner; insufficient data.
       - Multiple variants share the highest exposure count → tiebreak on
         distinct_campaigns; if still tied → no winner with clear reason.
       - Otherwise → winner is the single variant with the most exposures;
-        basis = "highest exposures (X) with Y distinct campaigns".
+        confidence is derived from the winner's exposure count.
     """
     if not metrics:
         return ExperimentWinnerResponse(
@@ -93,6 +108,13 @@ def evaluate_winner(
             winning_variant_id=None,
             winning_variant_name=None,
             basis="no exposures recorded",
+        )
+
+    if max_exposures < _MIN_EXPOSURES:
+        return ExperimentWinnerResponse(
+            winning_variant_id=None,
+            winning_variant_name=None,
+            basis=f"insufficient data: max exposures ({max_exposures}) below threshold ({_MIN_EXPOSURES})",
         )
 
     leaders = [m for m in metrics if m.exposures == max_exposures]
@@ -117,4 +139,5 @@ def evaluate_winner(
         winning_variant_id=winner.variant_id,
         winning_variant_name=winner.variant_name,
         basis=f"highest exposures ({winner.exposures}) with {winner.distinct_campaigns} distinct campaigns",
+        confidence=_confidence(winner.exposures),
     )

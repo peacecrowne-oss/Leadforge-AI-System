@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from auth.dependencies import get_current_user
 from core.feature_flags import get_plan_features
 from db import db_get_experiment_metrics
+from db.sqlite import db_delete_experiment
 from db.sqlite import db_connect
 from models import (
     ExperimentCreate,
@@ -105,6 +106,21 @@ def list_experiments(user: dict = Depends(get_current_user)):
     return [dict(r) for r in rows]
 
 
+@router.get("/variant-templates")
+def get_variant_templates():
+    """Return preset variant message templates for use when creating variants."""
+    return [
+        {
+            "name": "Variant A",
+            "message": "Hi, quick question — are you currently looking for more leads?"
+        },
+        {
+            "name": "Variant B",
+            "message": "Hi, I help businesses like yours generate qualified leads automatically. Open to a quick chat?"
+        },
+    ]
+
+
 @router.get("/{experiment_id}", response_model=ExperimentResponse)
 def get_experiment(experiment_id: str, user: dict = Depends(get_current_user)):
     _check_experiments_access(user)
@@ -164,9 +180,9 @@ def create_variant(experiment_id: str, body: ExperimentVariantCreate, user: dict
     with db_connect() as conn:
         conn.execute(
             "INSERT INTO experiment_variants "
-            "(id, experiment_id, name, traffic_percentage, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (variant_id, experiment_id, body.name, body.traffic_percentage, now),
+            "(id, experiment_id, name, traffic_percentage, message, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (variant_id, experiment_id, body.name, body.traffic_percentage, body.message, now),
         )
 
     logger.info(
@@ -181,6 +197,7 @@ def create_variant(experiment_id: str, body: ExperimentVariantCreate, user: dict
         "experiment_id": experiment_id,
         "name": body.name,
         "traffic_percentage": body.traffic_percentage,
+        "message": body.message,
         "created_at": now,
     }
 
@@ -217,6 +234,21 @@ def start_experiment(experiment_id: str, user: dict = Depends(get_current_user))
         "created_at": row["created_at"],
         "variants": [],
     }
+
+
+@router.delete("/{experiment_id}", status_code=200)
+def delete_experiment(experiment_id: str, user: dict = Depends(get_current_user)):
+    """Delete an experiment by ID."""
+    _check_experiments_access(user)
+    deleted = db_delete_experiment(experiment_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    logger.info(
+        "experiment_deleted experiment_id=%s user_id=%s",
+        experiment_id,
+        user["user_id"],
+    )
+    return {"status": "deleted", "id": experiment_id}
 
 
 @router.post("/{experiment_id}/complete", response_model=ExperimentWinnerResponse)

@@ -12,12 +12,17 @@ Steps:
   6. Store     – persist to database
   7. Index     – simulate Typesense indexing
 """
+import uuid
+from datetime import datetime, timezone
+
 from services.lead_discovery_service  import fetch_leads_from_api
 from services.lead_processing_service import normalize_leads, deduplicate_leads
 from services.lead_enrichment_service import enrich_leads
 from services.lead_scoring_service    import score_leads
 from services.lead_storage_service    import store_leads
 from services.lead_indexing_service   import index_leads
+from db.sqlite import db_save_job
+from models import SearchJob, LeadSearchRequest
 
 
 def run_pipeline(query: str, location: str, user_id: str) -> dict:
@@ -37,6 +42,8 @@ def run_pipeline(query: str, location: str, user_id: str) -> dict:
             "stored":     int,  # leads actually inserted into the DB
           }
     """
+    job_id = str(uuid.uuid4())
+
     # Step 1: Discover
     raw = fetch_leads_from_api(query, location)
 
@@ -53,10 +60,24 @@ def run_pipeline(query: str, location: str, user_id: str) -> dict:
     scored = score_leads(enriched)
 
     # Step 6: Store
-    stored_count = store_leads(scored, user_id)
+    stored_count = store_leads(scored, user_id, job_id)
 
     # Step 7: Index
     index_leads(scored)
+
+    # Register job in jobs table so the UI can discover this batch.
+    now = datetime.now(timezone.utc)
+    db_save_job(
+        SearchJob(
+            job_id=job_id,
+            status="complete",
+            created_at=now,
+            updated_at=now,
+            request=LeadSearchRequest(keywords=query, location=location),
+            results_count=len(scored),
+        ),
+        user_id=user_id,
+    )
 
     return {
         "discovered": len(raw),

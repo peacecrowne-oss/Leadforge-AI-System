@@ -19,6 +19,7 @@ export default function Login() {
     setError(null)
     try {
       const token = await login(email, password)
+      console.log("TOKEN:", token)
       setToken(token)
       navigate('/', { replace: true })
     } catch (err) {
