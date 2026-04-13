@@ -49,6 +49,13 @@ def fetch_leads_from_api(query: str, location: str) -> list[dict]:
         logger.error("Google Places API request failed: %s", exc)
         return []
 
+    print("[GOOGLE RAW RESPONSE]:", data)
+
+    status = data.get("status")
+    if status != "OK":
+        logger.error("Google API returned status: %s — full response: %s", status, data)
+        return []
+
     leads = []
     for result in data.get("results", []):
         leads.append({
@@ -57,8 +64,11 @@ def fetch_leads_from_api(query: str, location: str) -> list[dict]:
             "title":     query,
             "location":  result.get("formatted_address", ""),
             "website":   result.get("website", ""),
+            "email":     None,
+            "source":    "google",
         })
 
+    print("[PARSED LEADS]:", leads[:2])
     logger.info("Google Places returned %d results for query=%r location=%r",
                 len(leads), query, location)
     return leads

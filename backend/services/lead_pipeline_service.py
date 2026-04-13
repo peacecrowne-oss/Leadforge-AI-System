@@ -25,7 +25,7 @@ from db.sqlite import db_save_job
 from models import SearchJob, LeadSearchRequest
 
 
-def run_pipeline(query: str, location: str, user_id: str) -> dict:
+def run_pipeline(query: str, location: str, user_id: str, job_id: str | None = None) -> dict:
     """
     Run the full lead pipeline for the given search parameters.
 
@@ -33,16 +33,19 @@ def run_pipeline(query: str, location: str, user_id: str) -> dict:
         query:    Keyword to match against title / company.
         location: Location filter string.
         user_id:  ID of the requesting user (used for DB storage).
+        job_id:   Optional pre-created job id. If omitted, one is generated.
 
     Returns:
         Summary dict:
           {
+            "job_id":     str,  # the job id used for storage
             "discovered": int,  # raw leads returned by the API
             "processed":  int,  # leads remaining after dedup/enrich/score
             "stored":     int,  # leads actually inserted into the DB
           }
     """
-    job_id = str(uuid.uuid4())
+    if job_id is None:
+        job_id = str(uuid.uuid4())
 
     # Step 1: Discover
     raw = fetch_leads_from_api(query, location)
@@ -80,6 +83,7 @@ def run_pipeline(query: str, location: str, user_id: str) -> dict:
     )
 
     return {
+        "job_id":     job_id,
         "discovered": len(raw),
         "processed":  len(scored),
         "stored":     stored_count,

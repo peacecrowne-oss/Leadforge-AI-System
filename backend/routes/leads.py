@@ -23,6 +23,7 @@ from models import LeadSearchRequest, Lead, SearchJob
 from services.search_service import simulate_provider_search
 from services.apollo_service import fetch_apollo_leads
 from services.scoring_service import score_lead
+from services.lead_pipeline_service import run_pipeline
 from auth.dependencies import get_current_user
 from core.feature_flags import get_plan_features
 from db.sqlite import db_connect, db_save_job, db_get_job, db_load_results, db_save_results, db_get_variants_for_leads
@@ -74,6 +75,31 @@ def _get_owned_job(job_id: str, user_id: str) -> SearchJob:
     return job
 
 
+# ── Background task ───────────────────────────────────────────────────────────
+
+def _run_google_pipeline(job_id: str, request: LeadSearchRequest, user_id: str) -> None:
+    """Run the Google Places pipeline and sync results into JOBS/RESULTS for polling."""
+    try:
+        run_pipeline(
+            query=request.keywords or "",
+            location=request.location or "",
+            user_id=user_id,
+            job_id=job_id,
+        )
+        # Sync persisted results into the in-memory cache so polling can read them.
+        RESULTS[job_id] = _leads_from_rows(db_load_results(job_id))
+        row = db_get_job(job_id, user_id)
+        if row:
+            JOBS[job_id] = _job_from_row(row)
+    except Exception as exc:
+        logger.error("Google pipeline failed for job %s: %s", job_id, exc)
+        now = datetime.now(timezone.utc)
+        if job_id in JOBS:
+            JOBS[job_id] = JOBS[job_id].model_copy(
+                update={"status": "failed", "updated_at": now, "error": str(exc)}
+            )
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/leads/search", status_code=202)
@@ -100,8 +126,7 @@ def create_search_job(request: LeadSearchRequest, background_tasks: BackgroundTa
     # Persist immediately so the job survives a restart even if queued.
     db_save_job(JOBS[job_id], user_id=current_user["user_id"])
 
-    # JOBS and RESULTS are passed into the service to avoid circular imports.
-    background_tasks.add_task(simulate_provider_search, job_id, JOBS, RESULTS)
+    background_tasks.add_task(_run_google_pipeline, job_id, request, current_user["user_id"])
     return {"job_id": job_id}
 
 

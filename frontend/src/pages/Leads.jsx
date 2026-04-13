@@ -13,10 +13,6 @@ const FACTOR_LABELS = {
 }
 
 export default function Leads() {
-  // ── DEBUG: set to a known job_id to load CSV/Apollo import results directly.
-  // Set to null to use normal search flow.
-  const debugJobId = "063b0afb-cd3e-431f-94c6-0c188896cc27"
-
   const [form, setForm] = useState({ keywords: '', location: '', company: '', limit: '5' })
   const [phase, setPhase] = useState('idle')   // idle | searching | polling | done | error
   const [jobId, setJobId] = useState(null)
@@ -35,6 +31,11 @@ export default function Leads() {
   const [jobs, setJobs] = useState([])   // recent job history (persisted in localStorage)
   const [showImports, setShowImports] = useState(true)
   const intervalRef = useRef(null)
+  const jobIdRef    = useRef(null)
+
+  useEffect(() => {
+    jobIdRef.current = jobId
+  }, [jobId])
 
   // Client-side derived view — filter then sort; original `leads` is never mutated.
   const kw = clientKeyword.toLowerCase()
@@ -108,6 +109,10 @@ export default function Leads() {
         const nowComplete = data.status === 'complete' && lastSeenStatus.current !== 'complete'
 
         if (idle && (jobChanged || nowComplete)) {
+          handleLoadJob(data.job_id)
+        }
+
+        if (data?.job_id && data.job_id !== jobIdRef.current) {
           handleLoadJob(data.job_id)
         }
 
@@ -224,22 +229,6 @@ export default function Leads() {
       setJobId(data.job_id)
       setPhase('polling')
       startPoll(data.job_id)
-    } catch (err) {
-      setError(err.message)
-      setPhase('error')
-    }
-  }
-
-  async function handleLoadDebugJob() {
-    if (!debugJobId) return
-    setPhase('searching')
-    setError(null)
-    setLeads([])
-    try {
-      const res = await apiGet(`/leads/jobs/${debugJobId}/results`)
-      setLeads(res.results || [])
-      setJobId(debugJobId)
-      setPhase('done')
     } catch (err) {
       setError(err.message)
       setPhase('error')
@@ -382,17 +371,6 @@ export default function Leads() {
         </section>
       )}
 
-      {debugJobId && (
-        <section style={{ ...card, marginBottom: '1rem', border: '1px dashed #f90' }}>
-          <span style={{ fontSize: '0.82rem', color: '#888' }}>
-            [DEBUG] job_id: <code>{debugJobId}</code>
-          </span>
-          <button onClick={handleLoadDebugJob} disabled={busy} style={{ ...primaryBtn, marginLeft: '1rem' }}>
-            Load Results
-          </button>
-        </section>
-      )}
-
       <div style={card}>
         <form onSubmit={handleSearch}>
           <div style={grid}>
@@ -460,7 +438,7 @@ export default function Leads() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ background: '#f0f0f0' }}>
-                    {['Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Variant', 'Action'].map(h => (
+                    {['First Name', 'Last Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Variant', 'Action'].map(h => (
                       <th key={h} style={th}>{h}</th>
                     ))}
                   </tr>
@@ -475,7 +453,7 @@ export default function Leads() {
                         <tr style={{ borderBottom: (expanded || threadExpanded[lead.id]) ? 'none' : '1px solid #eee' }}>
                           <td style={td}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              {lead.full_name}
+                              {lead.full_name?.split(' ')[0] || ''}
                               {isTop && (
                                 <span style={{
                                   fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.4rem',
@@ -490,6 +468,7 @@ export default function Leads() {
                               id: {lead.id}
                             </div>
                           </td>
+                          <td style={td}>{lead.full_name?.split(' ').slice(1).join(' ') || ''}</td>
                           <td style={td}>{lead.title || '—'}</td>
                           <td style={td}>{lead.company || '—'}</td>
                           <td style={td}>{lead.email || '—'}</td>
@@ -566,14 +545,14 @@ export default function Leads() {
                         </tr>
                         {expanded && (
                           <tr style={{ background: '#f9f9f9', borderBottom: threadExpanded[lead.id] ? 'none' : '1px solid #eee' }}>
-                            <td colSpan={9} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
+                            <td colSpan={10} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
                               <ScoreBreakdown explanation={lead.score_explanation} />
                             </td>
                           </tr>
                         )}
                         {threadExpanded[lead.id] && (
                           <tr style={{ background: '#fafafa', borderBottom: '1px solid #eee' }}>
-                            <td colSpan={9} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
+                            <td colSpan={10} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
                               <p style={{ margin: '0 0 0.5rem', fontSize: '0.78rem', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                                 Conversation
                               </p>
