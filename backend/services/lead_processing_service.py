@@ -27,8 +27,15 @@ def normalize_leads(raw_leads: list[dict]) -> list[dict]:
             value = raw.get(key, "")
             return (value or "").strip()
 
+        first = _str("first_name")
+        last  = _str("last_name")
+        if first or last:
+            full_name = f"{first} {last}".strip()
+        else:
+            full_name = _str("full_name") or _str("company")
+
         normalized.append({
-            "full_name": _str("full_name"),
+            "full_name": full_name,
             "company":   _str("company"),
             "title":     _str("title"),
             "location":  _str("location"),

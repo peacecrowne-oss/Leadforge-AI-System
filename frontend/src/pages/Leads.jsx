@@ -140,8 +140,14 @@ export default function Leads() {
     setScoreExpanded({})
     setNlParsed(null)
     try {
-      const res = await apiPost('/leads/nl-search', { query: nlQuery })
-      setNlParsed(res.parsed)
+      console.log('[NLP INPUT]', nlQuery)
+      const res = await apiPost('/search-nlp', {
+        keywords: nlQuery,
+        location: '',
+        company:  '',
+        limit:    10,
+      })
+      console.log('[NLP SEARCH RESPONSE]', res)
       setJobId(res.job_id)
       setPhase('polling')
       startPoll(res.job_id)
@@ -153,6 +159,7 @@ export default function Leads() {
 
   async function handleSearch(e) {
     e.preventDefault()
+    console.log('[SEARCH TRIGGERED]', form)
     clearInterval(intervalRef.current)
     setPhase('searching')
     setError(null)
@@ -161,12 +168,28 @@ export default function Leads() {
     setScoreExpanded({})
     setNlParsed(null)
     try {
+      const isNaturalLanguage =
+        !!form.keywords &&
+        form.keywords.trim().split(/\s+/).length >= 2
+
+      console.log('[SEARCH TYPE]', {
+        query: form.keywords,
+        words: form.keywords.trim().split(/\s+/).length,
+        isNaturalLanguage,
+      })
+
+      const endpoint = isNaturalLanguage
+        ? '/search-nlp'
+        : '/leads/search'
+
       const body = { limit: Math.max(1, Number(form.limit)) }
       if (form.keywords) body.keywords = form.keywords
       if (form.location) body.location = form.location
       if (form.company) body.company = form.company
       console.log('[Search Request]', body)
-      const { job_id } = await apiPost('/leads/search', body)
+      const res = await apiPost(endpoint, body)
+      console.log('[SEARCH RESPONSE]', res)
+      const { job_id } = res
       setJobId(job_id)
       setPhase('polling')
       startPoll(job_id)
@@ -438,7 +461,7 @@ export default function Leads() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ background: '#f0f0f0' }}>
-                    {['First Name', 'Last Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Variant', 'Action'].map(h => (
+                    {['Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Variant', 'Action'].map(h => (
                       <th key={h} style={th}>{h}</th>
                     ))}
                   </tr>
@@ -453,7 +476,7 @@ export default function Leads() {
                         <tr style={{ borderBottom: (expanded || threadExpanded[lead.id]) ? 'none' : '1px solid #eee' }}>
                           <td style={td}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              {lead.full_name?.split(' ')[0] || ''}
+                              {lead.full_name || ''}
                               {isTop && (
                                 <span style={{
                                   fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.4rem',
@@ -468,7 +491,6 @@ export default function Leads() {
                               id: {lead.id}
                             </div>
                           </td>
-                          <td style={td}>{lead.full_name?.split(' ').slice(1).join(' ') || ''}</td>
                           <td style={td}>{lead.title || '—'}</td>
                           <td style={td}>{lead.company || '—'}</td>
                           <td style={td}>{lead.email || '—'}</td>
@@ -545,14 +567,14 @@ export default function Leads() {
                         </tr>
                         {expanded && (
                           <tr style={{ background: '#f9f9f9', borderBottom: threadExpanded[lead.id] ? 'none' : '1px solid #eee' }}>
-                            <td colSpan={10} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
+                            <td colSpan={9} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
                               <ScoreBreakdown explanation={lead.score_explanation} />
                             </td>
                           </tr>
                         )}
                         {threadExpanded[lead.id] && (
                           <tr style={{ background: '#fafafa', borderBottom: '1px solid #eee' }}>
-                            <td colSpan={10} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
+                            <td colSpan={9} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
                               <p style={{ margin: '0 0 0.5rem', fontSize: '0.78rem', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                                 Conversation
                               </p>

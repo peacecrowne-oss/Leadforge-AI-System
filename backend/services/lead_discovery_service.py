@@ -17,6 +17,67 @@ logger = logging.getLogger(__name__)
 _PLACES_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 
 
+def normalize_query(query: str) -> str:
+    q = query.lower()
+    for w in ["find", "show me", "looking for", "companies", "businesses", "near me"]:
+        q = q.replace(w, "")
+    return q.strip()
+
+
+def extract_intent(query: str) -> str:
+    KEYWORDS = [
+        "restaurant", "plumber", "lawyer", "agency",
+        "clinic", "dentist", "gym", "salon"
+    ]
+    q = query.lower()
+    for k in KEYWORDS:
+        if k in q:
+            return k
+    return query
+
+
+def parse_query(query: str) -> str:
+    q = query.lower()
+    KEYWORDS = ["restaurant", "plumber", "lawyer", "agency", "clinic"]
+    intent = None
+    for k in KEYWORDS:
+        if k in q:
+            intent = k
+            break
+    if not intent:
+        intent = q.split()[0] if q.split() else q
+    return intent
+
+
+def parse_natural_query(query: str) -> str:
+    q = query.lower()
+
+    # remove filler phrases
+    fillers = [
+        "find", "show me", "looking for", "i need",
+        "companies", "businesses", "near me",
+        "who are", "best", "top", "good"
+    ]
+    for f in fillers:
+        q = q.replace(f, "")
+
+    q = q.strip()
+
+    # simple intent extraction
+    KEYWORDS = [
+        "restaurant", "plumber", "lawyer", "agency",
+        "clinic", "dentist", "gym", "salon",
+        "software company", "marketing agency"
+    ]
+
+    for k in KEYWORDS:
+        if k in q:
+            return k
+
+    # fallback: first meaningful word
+    return q.split()[0] if q else query
+
+
 def fetch_leads_from_api(query: str, location: str) -> list[dict]:
     """
     Discover leads using the Google Places Text Search API.
@@ -36,8 +97,11 @@ def fetch_leads_from_api(query: str, location: str) -> list[dict]:
         logger.warning("GOOGLE_PLACES_API_KEY is not set — returning empty results")
         return []
 
+    intent = parse_natural_query(query)
+    print(f"[NLP] raw='{query}' → intent='{intent}'")
+
     params = {
-        "query": f"{query} in {location}",
+        "query": f"{intent} in {location}",
         "key":   api_key,
     }
 

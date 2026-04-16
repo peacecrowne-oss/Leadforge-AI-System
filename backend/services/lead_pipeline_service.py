@@ -49,6 +49,7 @@ def run_pipeline(query: str, location: str, user_id: str, job_id: str | None = N
 
     # Step 1: Discover
     raw = fetch_leads_from_api(query, location)
+    print(f"[PIPELINE] raw_count={len(raw)}")
 
     # Step 2: Normalize
     normalized = normalize_leads(raw)
@@ -61,6 +62,7 @@ def run_pipeline(query: str, location: str, user_id: str, job_id: str | None = N
 
     # Step 5: Score
     scored = score_leads(enriched)
+    print(f"[PIPELINE] scored_count={len(scored)}")
 
     # Step 6: Store
     stored_count = store_leads(scored, user_id, job_id)

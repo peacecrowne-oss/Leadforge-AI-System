@@ -80,6 +80,7 @@ def _get_owned_job(job_id: str, user_id: str) -> SearchJob:
 def _run_google_pipeline(job_id: str, request: LeadSearchRequest, user_id: str) -> None:
     """Run the Google Places pipeline and sync results into JOBS/RESULTS for polling."""
     try:
+        print("[BG TASK] STARTED")
         run_pipeline(
             query=request.keywords or "",
             location=request.location or "",
@@ -91,13 +92,16 @@ def _run_google_pipeline(job_id: str, request: LeadSearchRequest, user_id: str) 
         row = db_get_job(job_id, user_id)
         if row:
             JOBS[job_id] = _job_from_row(row)
+        print("[BG TASK] COMPLETED")
     except Exception as exc:
+        print("[BG TASK ERROR]:", str(exc))
         logger.error("Google pipeline failed for job %s: %s", job_id, exc)
         now = datetime.now(timezone.utc)
         if job_id in JOBS:
             JOBS[job_id] = JOBS[job_id].model_copy(
                 update={"status": "failed", "updated_at": now, "error": str(exc)}
             )
+        raise
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -127,6 +131,37 @@ def create_search_job(request: LeadSearchRequest, background_tasks: BackgroundTa
     db_save_job(JOBS[job_id], user_id=current_user["user_id"])
 
     background_tasks.add_task(_run_google_pipeline, job_id, request, current_user["user_id"])
+    return {"job_id": job_id}
+
+
+@router.post("/search-nlp", status_code=202)
+def search_leads_nlp(request: LeadSearchRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+    """Natural-language lead search — parses the keywords field before running the pipeline."""
+    from services.lead_discovery_service import parse_natural_query
+
+    raw_query = request.keywords or getattr(request, "query", "") or ""
+    print(f"[NLP ROUTE] raw_query='{raw_query}'")
+    parsed_query = parse_natural_query(raw_query)
+    print(f"[NLP ROUTE] raw='{raw_query}' → parsed='{parsed_query}'")
+
+    # Substitute parsed query into a copy of the request so location/company/limit are preserved.
+    nlp_request = request.model_copy(update={"keywords": parsed_query})
+
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    JOBS[job_id] = SearchJob(
+        job_id=job_id,
+        status="queued",
+        created_at=now,
+        updated_at=now,
+        request=nlp_request,
+    )
+    RESULTS[job_id] = []
+    JOB_OWNERS[job_id] = current_user["user_id"]
+    db_save_job(JOBS[job_id], user_id=current_user["user_id"])
+
+    background_tasks.add_task(_run_google_pipeline, job_id, nlp_request, current_user["user_id"])
     return {"job_id": job_id}
 
 
