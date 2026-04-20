@@ -6,6 +6,7 @@ Falls back to an empty list on any error so the pipeline never crashes.
 """
 import logging
 import os
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -131,6 +132,14 @@ def fetch_leads_from_api(query: str, location: str) -> list[dict]:
             "email":     None,
             "source":    "google",
         })
+
+    for lead in leads:
+        website = lead.get("website", "")
+        if website:
+            domain = urlparse(website).netloc.replace("www.", "")
+        else:
+            domain = ""
+        lead["domain"] = domain
 
     print("[PARSED LEADS]:", leads[:2])
     logger.info("Google Places returned %d results for query=%r location=%r",

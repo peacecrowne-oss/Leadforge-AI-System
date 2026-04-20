@@ -24,6 +24,7 @@ from services.search_service import simulate_provider_search
 from services.apollo_service import fetch_apollo_leads
 from services.scoring_service import score_lead
 from services.lead_pipeline_service import run_pipeline
+from services.lead_message_service import send_message_to_leads
 from auth.dependencies import get_current_user
 from core.feature_flags import get_plan_features
 from db.sqlite import db_connect, db_save_job, db_get_job, db_load_results, db_save_results, db_get_variants_for_leads
@@ -92,6 +93,12 @@ def _run_google_pipeline(job_id: str, request: LeadSearchRequest, user_id: str) 
         row = db_get_job(job_id, user_id)
         if row:
             JOBS[job_id] = _job_from_row(row)
+        # Explicitly stamp status and result count from live data.
+        JOBS[job_id] = JOBS[job_id].model_copy(update={
+            "status":        "complete",
+            "results_count": len(RESULTS[job_id]),
+            "updated_at":    datetime.now(timezone.utc),
+        })
         print("[BG TASK] COMPLETED")
     except Exception as exc:
         print("[BG TASK ERROR]:", str(exc))
@@ -241,9 +248,12 @@ def get_job_results(
     variants = db_get_variants_for_leads([lead.id for lead in paged])
     paged = [lead.model_copy(update={"variant": variants.get(lead.id)}) for lead in paged]
 
+    message = "Hi, are you open to a quick chat?"
+    enriched_results = send_message_to_leads(paged, message)
+
     return {
         "job_id": job_id,
-        "results": paged,
+        "results": enriched_results,
         "count": len(all_results),
         "offset": offset,
         "limit": limit,

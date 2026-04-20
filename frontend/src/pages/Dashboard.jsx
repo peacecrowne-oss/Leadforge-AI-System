@@ -8,6 +8,7 @@ export default function Dashboard() {
   const [statsMap, setStatsMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [leads, setLeads] = useState([])
 
   function checkHealth() {
     setHealthStatus('checking')
@@ -32,6 +33,16 @@ export default function Dashboard() {
         }
       }))
       setStatsMap(map)
+
+      // Fetch latest job results for the "Recent Emails Sent" drill-down.
+      // Failure is swallowed — dashboard works even without lead data.
+      try {
+        const latest = await apiGet('/leads/jobs/latest')
+        if (latest?.job_id) {
+          const res = await apiGet(`/leads/jobs/${latest.job_id}/results`)
+          setLeads(res.results || [])
+        }
+      } catch {}
     } catch (err) {
       setError(err.message)
     } finally {
@@ -85,6 +96,36 @@ export default function Dashboard() {
         <MetricCard label="Emails Opened"     value={totals.opened} />
         <MetricCard label="Replies"           value={totals.replied} />
       </div>
+
+      {/* ── Recent Emails Sent drill-down ── */}
+      {leads.filter(l => l.message_status === 'sent').length > 0 && (
+        <div style={{ ...card, marginTop: '1rem' }}>
+          <h3 style={{ marginTop: 0 }}>Recent Emails Sent</h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+              <thead>
+                <tr style={{ background: '#f0f0f0' }}>
+                  {['Name', 'Company', 'Email'].map(h => (
+                    <th key={h} style={th}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {leads
+                  .filter(l => l.message_status === 'sent')
+                  .slice(0, 5)
+                  .map((lead, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                      <td style={td}>{lead.full_name || '—'}</td>
+                      <td style={td}>{lead.company  || '—'}</td>
+                      <td style={td}>{lead.email    || '—'}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Error state ── */}
       {error && (
