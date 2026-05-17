@@ -62,9 +62,15 @@ def store_leads(leads: list[dict], user_id: str, job_id: str) -> int:
             extra["score_explanation"] = lead["score_explanation"]
         linkedin_url = json.dumps(extra) if extra else None
 
+        domain           = lead.get("domain") or None
+        confidence       = lead.get("confidence") or None
+        reason           = lead.get("reason") or None
+        fabricated_email = 1 if lead.get("fabricated_email") else None
+
         rows.append((
             job_id, lead_id, full_name, title, company,
             location, email, linkedin_url, score,
+            domain, confidence, reason, fabricated_email,
         ))
 
     if not rows:
@@ -75,8 +81,9 @@ def store_leads(leads: list[dict], user_id: str, job_id: str) -> int:
             """
             INSERT OR IGNORE INTO job_leads
                 (job_id, lead_id, full_name, title, company,
-                 location, email, linkedin_url, score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 location, email, linkedin_url, score,
+                 domain, confidence, reason, fabricated_email)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

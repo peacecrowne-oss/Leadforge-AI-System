@@ -7,6 +7,9 @@ Does NOT mutate the input list.
 """
 import os
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from db.sqlite import db_get_domain_cache, db_set_domain_cache
 
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
 
@@ -27,16 +30,97 @@ def enrich_leads(leads: list[dict]) -> list[dict]:
     for lead in leads:
         updated = dict(lead)  # shallow copy — do not mutate original
 
-        if updated.get("email") is None:
+        if not updated.get("email"):
             full_name = (updated.get("full_name") or "").strip()
             company   = (updated.get("company")   or "").strip()
 
-            first_name    = full_name.split()[0].lower() if full_name else "unknown"
-            company_slug  = company.lower().replace(" ", "")
+            first_name   = full_name.split()[0].lower() if full_name else "unknown"
+            company_slug = company.lower().replace(" ", "")
 
-            updated["email"] = f"{first_name}@{company_slug}.com"
+            updated["email"]            = f"{first_name}@{company_slug}.com"
+            updated["fabricated_email"] = True
 
         enriched.append(updated)
+    return enriched
+
+
+_ENRICH_WORKERS = 6
+_CACHE_TTL_DAYS = 7
+
+
+def _apply_details(details: dict, lead: dict) -> None:
+    """Copy non-null enrichment fields from details into lead, preserving existing values."""
+    if details.get("phone") and not lead.get("phone"):
+        lead["phone"]        = details["phone"]
+        lead["phone_source"] = details.get("phone_source", "scraped")
+    if details.get("address") and not lead.get("address"):
+        lead["address"]        = details["address"]
+        lead["address_source"] = details.get("address_source", "scraped")
+    if details.get("contact_name") and not lead.get("contact_name"):
+        lead["contact_name"]        = details["contact_name"]
+        lead["contact_name_source"] = details.get("contact_name_source", "scraped")
+
+
+def enrich_with_business_details(leads: list[dict]) -> list[dict]:
+    """
+    Web-scrape phone, address, and contact_name for leads that have a domain.
+
+    Preserves any values already present (OSM-sourced or previously set).
+    Per-lead exceptions are swallowed so one bad fetch never aborts the batch.
+    Each written field is paired with a *_source key:
+      "osm"                  — already set at discovery (highest trust)
+      "json_ld"              — structured data from homepage
+      "scraped_html"         — tel: link or regex on homepage
+      "scraped_contact_page" — tel: link or regex on /contact
+    """
+    # Partition leads into those with a domain (need HTTP) and those without.
+    indexed   = list(enumerate(leads))          # keep original order
+    to_fetch  = [(i, dict(lead)) for i, lead in indexed if lead.get("domain")]
+    no_domain = {i: dict(lead) for i, lead in indexed if not lead.get("domain")}
+
+    results: dict[int, dict] = dict(no_domain)
+
+    def _fetch_one(i: int, updated: dict) -> tuple[int, dict, bool]:
+        """Returns (original_index, enriched_lead, cache_hit)."""
+        domain = updated["domain"]
+
+        cached = db_get_domain_cache(domain, max_age_days=_CACHE_TTL_DAYS)
+        if cached is not None:
+            _apply_details(cached, updated)
+            return i, updated, True
+
+        try:
+            from services.website_email_extractor import extract_business_details
+            details = extract_business_details(domain)
+            db_set_domain_cache(domain, details)
+            _apply_details(details, updated)
+        except (OSError, ValueError, requests.exceptions.RequestException):
+            pass
+        return i, updated, False
+
+    cache_hits = cache_misses = 0
+    with ThreadPoolExecutor(max_workers=_ENRICH_WORKERS) as pool:
+        futures = {pool.submit(_fetch_one, i, updated): i for i, updated in to_fetch}
+        for future in as_completed(futures):
+            i, updated, hit = future.result()
+            results[i] = updated
+            if hit:
+                cache_hits += 1
+            else:
+                cache_misses += 1
+
+    # Rebuild in original order.
+    enriched = [results[i] for i in range(len(leads))]
+
+    total     = len(enriched)
+    with_ph   = sum(1 for l in enriched if l.get("phone"))
+    with_addr = sum(1 for l in enriched if l.get("address"))
+    with_name = sum(1 for l in enriched if l.get("contact_name"))
+    print(
+        f"[ENRICH_DETAILS] total={total}"
+        f" | phone={with_ph} | address={with_addr} | contact_name={with_name}"
+        f" | cache_hits={cache_hits} | cache_misses={cache_misses}"
+    )
     return enriched
 
 

@@ -32,10 +32,15 @@ export default function Leads() {
   const [showImports, setShowImports] = useState(true)
   const intervalRef = useRef(null)
   const jobIdRef    = useRef(null)
+  const phaseRef    = useRef('idle')
 
   useEffect(() => {
     jobIdRef.current = jobId
   }, [jobId])
+
+  useEffect(() => {
+    phaseRef.current = phase
+  }, [phase])
 
   // Client-side derived view — filter then sort; original `leads` is never mutated.
   const kw = clientKeyword.toLowerCase()
@@ -104,15 +109,11 @@ export default function Leads() {
         if (!res.ok) return
         const data = await res.json()
 
-        const idle = phase === 'idle' || phase === 'done' || phase === 'error'
+        const idle = phaseRef.current === 'idle' || phaseRef.current === 'done' || phaseRef.current === 'error'
         const jobChanged  = data.job_id !== lastSeenJobId.current
         const nowComplete = data.status === 'complete' && lastSeenStatus.current !== 'complete'
 
         if (idle && (jobChanged || nowComplete)) {
-          handleLoadJob(data.job_id)
-        }
-
-        if (data?.job_id && data.job_id !== jobIdRef.current) {
           handleLoadJob(data.job_id)
         }
 
@@ -226,6 +227,14 @@ export default function Leads() {
       setError(err.message)
       setPhase('error')
     }
+  }
+
+  function deleteImport(jobId) {
+    setJobs(prev => {
+      const updated = prev.filter(j => j.job_id !== jobId)
+      localStorage.setItem('leadforge_jobs', JSON.stringify(updated))
+      return updated
+    })
   }
 
   async function handleImportCsv(e) {
@@ -342,52 +351,50 @@ export default function Leads() {
         )}
       </section>
 
-      <section style={{ ...card, marginBottom: '1rem' }}>
-        <h3 style={{ marginTop: 0 }}>Import CSV</h3>
-        <input
-          type="file"
-          accept=".csv"
-          disabled={busy}
-          onChange={handleImportCsv}
-          style={{ fontSize: '0.9rem' }}
-        />
-      </section>
-
       {jobs.length > 0 && (
         <section style={{ ...card, marginBottom: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ marginTop: 0 }}>Recent Imports</h3>
+            <h3 style={{ marginTop: 0 }}>Recent Searches</h3>
             <button onClick={() => setShowImports(v => !v)}>
               {showImports ? 'Hide' : 'Show'}
             </button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
             {showImports && jobs.map(j => (
-              <button
-                key={j.job_id}
-                onClick={() => handleLoadJob(j.job_id)}
-                disabled={busy}
-                style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '0.45rem 0.75rem', border: '1px solid',
-                  borderColor: j.job_id === jobId ? '#1a1a2e' : '#ddd',
-                  borderRadius: 6, background: j.job_id === jobId ? '#f0f0f8' : '#fff',
-                  cursor: 'pointer', fontSize: '0.85rem', textAlign: 'left',
-                  fontWeight: j.job_id === jobId ? 600 : 400,
-                }}
-              >
-                <span style={{ fontFamily: 'monospace', color: '#555' }}>
-                  {j.job_id.slice(0, 8)}…
-                </span>
-                <span style={{ color: '#888' }}>
-                  {j.results_count} lead{j.results_count !== 1 ? 's' : ''}
-                  {j.created_at && (
-                    <span style={{ marginLeft: '0.75rem' }}>
-                      {new Date(j.created_at).toLocaleString()}
-                    </span>
-                  )}
-                </span>
-              </button>
+              <div key={j.job_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <button
+                  onClick={() => handleLoadJob(j.job_id)}
+                  disabled={busy}
+                  style={{
+                    flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '0.45rem 0.75rem', border: '1px solid',
+                    borderColor: j.job_id === jobId ? '#1a1a2e' : '#ddd',
+                    borderRadius: 6, background: j.job_id === jobId ? '#f0f0f8' : '#fff',
+                    cursor: 'pointer', fontSize: '0.85rem', textAlign: 'left',
+                    fontWeight: j.job_id === jobId ? 600 : 400,
+                  }}
+                >
+                  <span style={{ fontFamily: 'monospace', color: '#555' }}>
+                    {j.job_id.slice(0, 8)}…
+                  </span>
+                  <span style={{ color: '#888' }}>
+                    {j.results_count} lead{j.results_count !== 1 ? 's' : ''}
+                    {j.created_at && (
+                      <span style={{ marginLeft: '0.75rem' }}>
+                        {new Date(j.created_at).toLocaleString()}
+                      </span>
+                    )}
+                  </span>
+                </button>
+                <button
+                  onClick={() => deleteImport(j.job_id)}
+                  disabled={busy}
+                  title="Remove from history"
+                  style={{ ...smallBtn, color: '#c62828', borderColor: '#e0e0e0', flexShrink: 0 }}
+                >
+                  ×
+                </button>
+              </div>
             ))}
 
           </div>
@@ -461,7 +468,7 @@ export default function Leads() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ background: '#f0f0f0' }}>
-                    {['Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Variant', 'Status', 'Action'].map(h => (
+                    {['Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Confidence', 'Reason', 'Domain', 'Variant', 'Status', 'Action'].map(h => (
                       <th key={h} style={th}>{h}</th>
                     ))}
                   </tr>
@@ -507,10 +514,14 @@ export default function Leads() {
                               </span>
                             </button>
                           </td>
+                          <td style={td}>{lead.confidence || '—'}</td>
+                          <td style={td}>{lead.reason || '—'}</td>
+                          <td style={td}>{lead.domain || '—'}</td>
                           <td style={td}>{lead.variant || '—'}</td>
                           <td style={td}>
                             {lead.message_status === 'sent' && '✅ Sent'}
                             {lead.message_status === 'no_email' && '⚠️ No Email'}
+                            {lead.message_status === 'skipped_fabricated_email' && '🚫 Fabricated Email'}
                             {!lead.message_status && '—'}
                           </td>
                           <td style={td}>
@@ -572,14 +583,14 @@ export default function Leads() {
                         </tr>
                         {expanded && (
                           <tr style={{ background: '#f9f9f9', borderBottom: threadExpanded[lead.id] ? 'none' : '1px solid #eee' }}>
-                            <td colSpan={10} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
+                            <td colSpan={13} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
                               <ScoreBreakdown explanation={lead.score_explanation} />
                             </td>
                           </tr>
                         )}
                         {threadExpanded[lead.id] && (
                           <tr style={{ background: '#fafafa', borderBottom: '1px solid #eee' }}>
-                            <td colSpan={10} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
+                            <td colSpan={13} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
                               <p style={{ margin: '0 0 0.5rem', fontSize: '0.78rem', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                                 Conversation
                               </p>

@@ -15,9 +15,12 @@ Steps:
 import uuid
 from datetime import datetime, timezone
 
-from services.lead_discovery_service  import fetch_leads_from_api
+# from services.lead_discovery_service  import fetch_leads_from_api  # temporarily disabled for Bing scraper test
+from services.csv_lead_source          import load_leads_from_csv
+from services.osm_lead_source          import fetch_osm_leads
+from services.lead_aggregation_service import aggregate_leads
 from services.lead_processing_service import normalize_leads, deduplicate_leads
-from services.lead_enrichment_service import enrich_leads
+from services.lead_enrichment_service import enrich_leads, enrich_with_business_details
 from services.lead_scoring_service    import score_leads
 from services.lead_storage_service    import store_leads
 from services.lead_indexing_service   import index_leads
@@ -48,24 +51,46 @@ def run_pipeline(query: str, location: str, user_id: str, job_id: str | None = N
         job_id = str(uuid.uuid4())
 
     # Step 1: Discover
-    raw = fetch_leads_from_api(query, location)
-    print(f"[PIPELINE] raw_count={len(raw)}")
+    # raw = fetch_leads_from_api(query, location)  # temporarily disabled for Bing scraper test
+
+    # Primary source: CSV
+    source1 = load_leads_from_csv("data/leads.csv")
+    print(f"[PIPELINE] csv_leads={len(source1)}")
+
+    # Secondary source: OpenStreetMap via Overpass API
+    try:
+        source2 = fetch_osm_leads(query, location)
+        print(f"[PIPELINE] osm_leads={len(source2)}")
+    except Exception as exc:
+        print(f"[PIPELINE] OSM fetch failed, falling back to empty source2: {exc}")
+        source2 = []
+
+    raw = aggregate_leads(source1, source2)
+    print(f"[PIPELINE] aggregate_count={len(raw)}")
 
     # Step 2: Normalize
     normalized = normalize_leads(raw)
+    print(f"[PIPELINE] normalized_count={len(normalized)}")
 
     # Step 3: Deduplicate
     cleaned = deduplicate_leads(normalized)
+    print(f"[PIPELINE] deduped_count={len(cleaned)}")
 
     # Step 4: Enrich
     enriched = enrich_leads(cleaned)
+    enriched = enrich_with_business_details(enriched)
+    print(f"[PIPELINE] enriched_count={len(enriched)}")
 
     # Step 5: Score
     scored = score_leads(enriched)
-    print(f"[PIPELINE] scored_count={len(scored)}")
+    high   = sum(1 for l in scored if l.get("confidence") == "high")
+    medium = sum(1 for l in scored if l.get("confidence") == "medium")
+    low    = sum(1 for l in scored if l.get("confidence") == "low")
+    print(f"[PIPELINE] scored_count={len(scored)} high={high} medium={medium} low={low}")
 
     # Step 6: Store
     stored_count = store_leads(scored, user_id, job_id)
+    print(f"[PIPELINE] stored_count={stored_count}")
 
     # Step 7: Index
     index_leads(scored)

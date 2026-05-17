@@ -31,6 +31,11 @@ class Lead(BaseModel):
     score: float | None = None
     score_explanation: dict | None = None
     variant: str | None = None
+    domain: str | None = None
+    confidence: str | None = None
+    reason: str | None = None
+    website: str | None = None
+    fabricated_email: bool | None = None
 
 
 class SearchJob(BaseModel):
@@ -99,6 +104,12 @@ class CampaignLeadDetail(BaseModel):
     email: str | None = None
     linkedin_url: str | None = None
     score: float | None = None
+    domain: str | None = None
+    confidence: str | None = None
+    reason: str | None = None
+    website: str | None = None
+    fabricated_email: bool | None = None
+    message_status: str | None = None
 
 
 class CampaignStatsResponse(BaseModel):
@@ -112,6 +123,7 @@ class CampaignStatsResponse(BaseModel):
     replied_count: int
     failed_count: int
     last_run_at: str | None
+    skipped_fabricated_count: int = 0
 
 
 # ── A/B Testing models ────────────────────────────────────────────────────────

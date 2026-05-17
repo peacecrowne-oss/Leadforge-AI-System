@@ -1,58 +1,58 @@
-"""
-lead_scoring_service.py
-
-Wraps the existing deterministic score_lead() for use in the pipeline.
-Converts plain lead dicts + an optional context dict into the typed objects
-score_lead() expects, then attaches the result back onto the lead.
-
-Does NOT mutate input. Does NOT connect to DB.
-"""
-import uuid
-
-from models import Lead, LeadSearchRequest
-from services.scoring_service import score_lead
-
-
-def score_leads(leads: list[dict], context: dict | None = None) -> list[dict]:
+def score_leads(leads: list[dict]) -> list[dict]:
     """
-    Score each lead using the existing deterministic scoring engine.
-
-    Args:
-        leads:   List of lead dicts (output of normalize/enrich steps).
-        context: Optional dict with scoring context keys:
-                   keywords, title, location, company, limit
-                 Maps directly to LeadSearchRequest fields.
-                 Pass None (or {}) for context-free scoring.
-
-    Returns:
-        A new list of lead dicts, each with two extra keys added:
-          score             – float in [0.0, 1.0]
-          score_explanation – dict mapping factor name → weighted contribution
+    Simple scoring + explainability
     """
-    ctx = context or {}
-    request = LeadSearchRequest(
-        keywords=ctx.get("keywords"),
-        title=ctx.get("title"),
-        location=ctx.get("location"),
-        company=ctx.get("company"),
+
+    for lead in leads:
+        score = 0
+        reasons = []
+
+        if lead.get("email"):
+            if lead.get("fabricated_email"):
+                score += 1
+                reasons.append("estimated email")
+            else:
+                score += 2
+                reasons.append("has email")
+
+        if lead.get("domain"):
+            score += 1
+            reasons.append("has domain")
+
+        if lead.get("website"):
+            score += 1
+            reasons.append("has website")
+
+        lead["score"] = score
+        # Fabricated emails cannot achieve "high" confidence — only a real,
+        # verified email address qualifies a lead for that tier.
+        if lead.get("fabricated_email") and score >= 3:
+            lead["confidence"] = "medium"
+        else:
+            lead["confidence"] = (
+                "high"   if score >= 3 else
+                "medium" if score == 2 else
+                "low"
+            )
+        lead["reason"] = ", ".join(reasons)
+
+        # REMOVE old fields if present
+        if "score_explanation" in lead:
+            del lead["score_explanation"]
+
+    total        = len(leads)
+    with_email   = sum(1 for l in leads if l.get("email"))
+    real_email   = sum(1 for l in leads if l.get("email") and not l.get("fabricated_email"))
+    fab_email    = sum(1 for l in leads if l.get("fabricated_email"))
+    with_domain  = sum(1 for l in leads if l.get("domain"))
+    with_website = sum(1 for l in leads if l.get("website"))
+    zero_signal  = sum(1 for l in leads if l.get("score", 0) == 0)
+    print(
+        f"[SCORER] total={total}"
+        f" | email={with_email}/{total} (real={real_email} +2pts, fabricated={fab_email} +1pt)"
+        f" | domain={with_domain}/{total} (+1pt)"
+        f" | website={with_website}/{total} (+1pt)"
+        f" | zero_signal={zero_signal}/{total}"
     )
 
-    scored = []
-    for lead in leads:
-        lead_obj = Lead(
-            id=lead.get("id") or str(uuid.uuid4()),
-            full_name=lead.get("full_name") or "",
-            title=lead.get("title"),
-            company=lead.get("company"),
-            location=lead.get("location"),
-            email=lead.get("email"),
-        )
-
-        score, explanation = score_lead(lead_obj, request)
-
-        updated = dict(lead)
-        updated["score"] = score
-        updated["score_explanation"] = explanation
-        scored.append(updated)
-
-    return scored
+    return sorted(leads, key=lambda x: x.get("score", 0), reverse=True)

@@ -11,15 +11,17 @@ def normalize_leads(raw_leads: list[dict]) -> list[dict]:
     """
     Normalize a list of raw lead dicts into a consistent schema.
 
-    Each output dict contains:
-        full_name : str   – whitespace-stripped
+    Cleaning applied to known fields:
+        full_name : str   – whitespace-stripped; derived from first/last if present
         company   : str   – whitespace-stripped
         title     : str   – whitespace-stripped
         location  : str   – whitespace-stripped
         website   : str   – whitespace-stripped, lowercased
-        email     : None  – placeholder; not populated at this stage
 
-    Missing fields default to "" (or None for email).
+    All other fields (domain, source, email, email_candidates, roles, etc.)
+    are passed through from the input unchanged.  The function never builds a
+    whitelist dict — it copies the full input and overwrites only the cleaned
+    fields, so new fields added by any discovery service survive automatically.
     """
     normalized = []
     for raw in raw_leads:
@@ -34,14 +36,13 @@ def normalize_leads(raw_leads: list[dict]) -> list[dict]:
         else:
             full_name = _str("full_name") or _str("company")
 
-        normalized.append({
-            "full_name": full_name,
-            "company":   _str("company"),
-            "title":     _str("title"),
-            "location":  _str("location"),
-            "website":   _str("website").lower(),
-            "email":     None,
-        })
+        lead = dict(raw)
+        lead["full_name"] = full_name
+        lead["company"]   = _str("company")
+        lead["title"]     = _str("title")
+        lead["location"]  = _str("location")
+        lead["website"]   = _str("website").lower()
+        normalized.append(lead)
     return normalized
 
 

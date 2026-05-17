@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 import sqlite3
@@ -203,14 +203,18 @@ def db_load_results(job_id: str) -> list[dict]:
         ).fetchall()
     return [
         {
-            "id": row["lead_id"],
-            "full_name": row["full_name"],
-            "title": row["title"],
-            "company": row["company"],
-            "location": row["location"],
-            "email": row["email"],
-            "linkedin_url": row["linkedin_url"],
-            "score": row["score"],
+            "id":               row["lead_id"],
+            "full_name":        row["full_name"],
+            "title":            row["title"],
+            "company":          row["company"],
+            "location":         row["location"],
+            "email":            row["email"],
+            "linkedin_url":     row["linkedin_url"],
+            "score":            row["score"],
+            "domain":           row["domain"],
+            "confidence":       row["confidence"],
+            "reason":           row["reason"],
+            "fabricated_email": bool(row["fabricated_email"]) if row["fabricated_email"] else None,
         }
         for row in rows
     ]
@@ -470,7 +474,11 @@ def db_list_campaign_leads(campaign_id: str, user_id: str) -> list[dict] | None:
                    jl.location,
                    jl.email,
                    jl.linkedin_url,
-                   jl.score
+                   jl.score,
+                   jl.domain,
+                   jl.confidence,
+                   jl.reason,
+                   jl.fabricated_email
             FROM campaign_leads cl
             JOIN job_leads jl
               ON jl.job_id = cl.job_id AND jl.lead_id = cl.lead_id
@@ -546,14 +554,33 @@ def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
         if camp is None:
             return None
 
-        lead_count = conn.execute(
-            "SELECT COUNT(*) FROM campaign_leads WHERE campaign_id = ?",
+        lead_row = conn.execute(
+            """
+            SELECT
+                COUNT(*)                                                   AS total_count,
+                SUM(CASE WHEN jl.fabricated_email = 1 THEN 1 ELSE 0 END)  AS fabricated_count
+            FROM campaign_leads cl
+            JOIN job_leads jl ON jl.job_id = cl.job_id AND jl.lead_id = cl.lead_id
+            WHERE cl.campaign_id = ?
+            """,
             (campaign_id,),
-        ).fetchone()[0]
+        ).fetchone()
+
+        lead_count         = lead_row["total_count"]     or 0
+        skipped_fabricated = lead_row["fabricated_count"] or 0
+        sendable_count     = lead_count - skipped_fabricated
+
         if lead_count == 0:
             raise ValueError("Campaign has no assigned leads")
 
-        metrics = _compute_stats(lead_count)
+        print(
+            f"[CAMPAIGN] execution campaign_id={campaign_id}"
+            f" | total={lead_count}"
+            f" | sendable={sendable_count}"
+            f" | skipped_fabricated={skipped_fabricated}"
+        )
+
+        metrics = _compute_stats(sendable_count)
         now = datetime.now(timezone.utc).isoformat()
 
         # ── Experiment variant assignment ──────────────────────────────────
@@ -664,6 +691,7 @@ def db_run_campaign(campaign_id: str, user_id: str) -> dict | None:
         "last_run_at": now,
         "assigned_variant_id": assigned_variant_id,
         "assigned_variant_name": assigned_variant_name,
+        "skipped_fabricated_count": skipped_fabricated,
     }
 
 
@@ -774,6 +802,73 @@ def db_delete_experiment(experiment_id: str) -> bool:
             (experiment_id,),
         )
     return cursor.rowcount > 0
+
+
+# ── Domain enrichment cache ───────────────────────────────────────────────────
+
+def db_get_domain_cache(domain: str, max_age_days: int = 7) -> dict | None:
+    """Return cached enrichment fields for domain, or None if not cached / expired.
+
+    Returns an empty dict {} when the domain was previously fetched but yielded
+    no extractable fields — callers treat this as a valid hit to avoid re-scraping.
+    Returns None only when the domain is absent from the cache or the row is older
+    than max_age_days.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM domain_enrichment_cache"
+            " WHERE domain = ? AND cached_at >= ?",
+            (domain, cutoff),
+        ).fetchone()
+    if row is None:
+        return None
+    row = dict(row)
+    result = {}
+    for field in (
+        "phone", "phone_source",
+        "address", "address_source",
+        "contact_name", "contact_name_source",
+    ):
+        if row.get(field):
+            result[field] = row[field]
+    return result
+
+
+def db_set_domain_cache(domain: str, details: dict) -> None:
+    """Upsert enrichment fields for domain with the current UTC timestamp.
+
+    Passing an empty dict caches the negative result so the domain is not
+    re-scraped until the TTL expires.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO domain_enrichment_cache
+                (domain, phone, phone_source, address, address_source,
+                 contact_name, contact_name_source, cached_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(domain) DO UPDATE SET
+                phone               = excluded.phone,
+                phone_source        = excluded.phone_source,
+                address             = excluded.address,
+                address_source      = excluded.address_source,
+                contact_name        = excluded.contact_name,
+                contact_name_source = excluded.contact_name_source,
+                cached_at           = excluded.cached_at
+            """,
+            (
+                domain,
+                details.get("phone"),
+                details.get("phone_source"),
+                details.get("address"),
+                details.get("address_source"),
+                details.get("contact_name"),
+                details.get("contact_name_source"),
+                now,
+            ),
+        )
 
 
 # ── Replies ───────────────────────────────────────────────────────────────────
