@@ -42,6 +42,13 @@ def run_migrations(conn: sqlite3.Connection) -> None:
         for row in conn.execute("SELECT name FROM schema_migrations").fetchall()
     }
 
+    _015 = "015_add_verification_columns.sql"
+    print(
+        f"[MIGRATIONS] already_applied_count={len(applied)}"
+        f" | migration_015={'APPLIED' if _015 in applied else 'PENDING'}"
+        f" | applied={sorted(applied)}"
+    )
+
     for sql_file in sorted(_MIGRATIONS_DIR.glob("*.sql")):
         name = sql_file.name
         if name in applied:

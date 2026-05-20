@@ -23,6 +23,7 @@ def load_leads_from_csv(file_path: str) -> list[dict]:
                     "website": row.get("website", ""),
                     "email_candidates": [row.get("email")] if row.get("email") else [],
                     "source": row.get("source", "csv"),
+                    "provider": "csv",
                 })
     except Exception:
         return []

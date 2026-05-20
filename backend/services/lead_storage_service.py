@@ -62,29 +62,70 @@ def store_leads(leads: list[dict], user_id: str, job_id: str) -> int:
             extra["score_explanation"] = lead["score_explanation"]
         linkedin_url = json.dumps(extra) if extra else None
 
-        domain           = lead.get("domain") or None
-        confidence       = lead.get("confidence") or None
-        reason           = lead.get("reason") or None
-        fabricated_email = 1 if lead.get("fabricated_email") else None
+        phone                 = lead.get("phone") or None
+        address               = lead.get("address") or None
+        domain                = lead.get("domain") or None
+        confidence            = lead.get("confidence") or None
+        reason                = lead.get("reason") or None
+        fabricated_email      = 1 if lead.get("fabricated_email") else None
+        provider              = lead.get("provider") or None
+        provider_entity_type  = lead.get("provider_entity_type") or None
+        provider_confidence   = lead.get("provider_confidence") or None
+        phone_provider        = lead.get("phone_provider") or None
+        email_provider        = lead.get("email_provider") or None
+        domain_provider       = lead.get("domain_provider") or None
+        address_provider      = lead.get("address_provider") or None
+        contact_name          = lead.get("contact_name") or None
+        contact_role          = lead.get("contact_role") or None
+        contact_source        = lead.get("contact_source") or None
+        contact_confidence    = lead.get("contact_confidence") or None
+        identity_type         = lead.get("identity_type") or None
 
         rows.append((
             job_id, lead_id, full_name, title, company,
             location, email, linkedin_url, score,
             domain, confidence, reason, fabricated_email,
+            provider, provider_entity_type, provider_confidence,
+            phone_provider, email_provider, domain_provider, address_provider,
+            phone, address,
+            contact_name, contact_role, contact_source, contact_confidence,
+            identity_type,
         ))
 
+    print(f"[STORE] job_id={job_id} input_leads={len(leads)} rows_prepared={len(rows)}")
+    if leads:
+        _s = leads[0]
+        print(
+            f"[STORE] sample[0] full_name={_s.get('full_name')!r}"
+            f" company={_s.get('company')!r}"
+            f" email={_s.get('email')!r}"
+            f" score={_s.get('score')}"
+            f" provider={_s.get('provider')!r}"
+            f" provider_entity_type={_s.get('provider_entity_type')!r}"
+        )
+
     if not rows:
+        print(f"[STORE] job_id={job_id} ABORTED — no rows to insert")
         return 0
 
+    import time as _time
     with db_connect() as conn:
+        _write_t0 = _time.perf_counter()
         cursor = conn.executemany(
             """
             INSERT OR IGNORE INTO job_leads
                 (job_id, lead_id, full_name, title, company,
                  location, email, linkedin_url, score,
-                 domain, confidence, reason, fabricated_email)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 domain, confidence, reason, fabricated_email,
+                 provider, provider_entity_type, provider_confidence,
+                 phone_provider, email_provider, domain_provider, address_provider,
+                 phone, address,
+                 contact_name, contact_role, contact_source, contact_confidence,
+                 identity_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
+        _write_ms = round((_time.perf_counter() - _write_t0) * 1000)
+        print(f"[STORE] job_id={job_id} cursor.rowcount={cursor.rowcount} executemany_ms={_write_ms}")
         return cursor.rowcount

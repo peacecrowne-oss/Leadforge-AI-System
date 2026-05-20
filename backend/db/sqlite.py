@@ -203,18 +203,32 @@ def db_load_results(job_id: str) -> list[dict]:
         ).fetchall()
     return [
         {
-            "id":               row["lead_id"],
-            "full_name":        row["full_name"],
-            "title":            row["title"],
-            "company":          row["company"],
-            "location":         row["location"],
-            "email":            row["email"],
-            "linkedin_url":     row["linkedin_url"],
-            "score":            row["score"],
-            "domain":           row["domain"],
-            "confidence":       row["confidence"],
-            "reason":           row["reason"],
-            "fabricated_email": bool(row["fabricated_email"]) if row["fabricated_email"] else None,
+            "id":                    row["lead_id"],
+            "full_name":             row["full_name"],
+            "title":                 row["title"],
+            "company":               row["company"],
+            "location":              row["location"],
+            "email":                 row["email"],
+            "linkedin_url":          row["linkedin_url"],
+            "score":                 row["score"],
+            "domain":                row["domain"],
+            "confidence":            row["confidence"],
+            "reason":                row["reason"],
+            "fabricated_email":      bool(row["fabricated_email"]) if row["fabricated_email"] else None,
+            "provider":              row["provider"],
+            "provider_entity_type":  row["provider_entity_type"],
+            "provider_confidence":   row["provider_confidence"],
+            "phone":                 row["phone"],
+            "phone_provider":        row["phone_provider"],
+            "email_provider":        row["email_provider"],
+            "domain_provider":       row["domain_provider"],
+            "address":               row["address"],
+            "address_provider":      row["address_provider"],
+            "contact_name":          row["contact_name"],
+            "contact_role":          row["contact_role"],
+            "contact_source":        row["contact_source"],
+            "contact_confidence":    row["contact_confidence"],
+            "identity_type":         row["identity_type"],
         }
         for row in rows
     ]
@@ -822,6 +836,7 @@ def db_get_domain_cache(domain: str, max_age_days: int = 7) -> dict | None:
             (domain, cutoff),
         ).fetchone()
     if row is None:
+        print(f"[CACHE_GET] domain={domain} status=MISS")
         return None
     row = dict(row)
     result = {}
@@ -832,6 +847,22 @@ def db_get_domain_cache(domain: str, max_age_days: int = 7) -> dict | None:
     ):
         if row.get(field):
             result[field] = row[field]
+    # Always include the cache-write timestamp so callers can stamp freshness.
+    result["enriched_at"] = row["cached_at"]
+    # Verification signals (nullable — present only when a check was recorded).
+    if row["domain_verified"] is not None:
+        result["domain_verified"] = bool(row["domain_verified"])
+    if row["mx_present"] is not None:
+        result["mx_present"] = bool(row["mx_present"])
+    if row.get("verification_checked_at"):
+        result["verification_checked_at"] = row["verification_checked_at"]
+    print(
+        f"[CACHE_GET] domain={domain} status=HIT"
+        f" | phone={bool(result.get('phone'))}"
+        f" | domain_verified={result.get('domain_verified')}"
+        f" | mx_present={result.get('mx_present')}"
+        f" | fields={list(result.keys())}"
+    )
     return result
 
 
@@ -842,21 +873,38 @@ def db_set_domain_cache(domain: str, details: dict) -> None:
     re-scraped until the TTL expires.
     """
     now = datetime.now(timezone.utc).isoformat()
+
+    # Convert bool verification flags to SQLite INTEGER (1/0/NULL).
+    def _bool_to_int(val) -> int | None:
+        return int(val) if isinstance(val, bool) else None
+
+    print(
+        f"[CACHE_SET] domain={domain}"
+        f" | phone={bool(details.get('phone'))}"
+        f" | domain_verified={_bool_to_int(details.get('domain_verified'))}"
+        f" | mx_present={_bool_to_int(details.get('mx_present'))}"
+        f" | fields={[k for k, v in details.items() if v is not None]}"
+    )
+
     with db_connect() as conn:
         conn.execute(
             """
             INSERT INTO domain_enrichment_cache
                 (domain, phone, phone_source, address, address_source,
-                 contact_name, contact_name_source, cached_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 contact_name, contact_name_source, cached_at,
+                 domain_verified, mx_present, verification_checked_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(domain) DO UPDATE SET
-                phone               = excluded.phone,
-                phone_source        = excluded.phone_source,
-                address             = excluded.address,
-                address_source      = excluded.address_source,
-                contact_name        = excluded.contact_name,
-                contact_name_source = excluded.contact_name_source,
-                cached_at           = excluded.cached_at
+                phone                   = excluded.phone,
+                phone_source            = excluded.phone_source,
+                address                 = excluded.address,
+                address_source          = excluded.address_source,
+                contact_name            = excluded.contact_name,
+                contact_name_source     = excluded.contact_name_source,
+                cached_at               = excluded.cached_at,
+                domain_verified         = excluded.domain_verified,
+                mx_present              = excluded.mx_present,
+                verification_checked_at = excluded.verification_checked_at
             """,
             (
                 domain,
@@ -867,6 +915,9 @@ def db_set_domain_cache(domain: str, details: dict) -> None:
                 details.get("contact_name"),
                 details.get("contact_name_source"),
                 now,
+                _bool_to_int(details.get("domain_verified")),
+                _bool_to_int(details.get("mx_present")),
+                details.get("verification_checked_at"),
             ),
         )
 

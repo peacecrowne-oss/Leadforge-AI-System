@@ -36,6 +36,20 @@ class Lead(BaseModel):
     reason: str | None = None
     website: str | None = None
     fabricated_email: bool | None = None
+    provider: str | None = None
+    provider_entity_type: str | None = None
+    provider_confidence: str | None = None
+    phone: str | None = None
+    phone_provider: str | None = None
+    contact_name: str | None = None
+    contact_role: str | None = None
+    contact_source: str | None = None
+    contact_confidence: str | None = None
+    email_provider: str | None = None
+    domain_provider: str | None = None
+    address: str | None = None
+    address_provider: str | None = None
+    identity_type: str | None = None
 
 
 class SearchJob(BaseModel):

@@ -156,18 +156,76 @@ def _ld_address(blocks: list[dict]) -> str | None:
     return None
 
 
-def _ld_contact_name(blocks: list[dict]) -> str | None:
+# JSON-LD keys that carry a named person, mapped to their display role label.
+_LD_CONTACT_KEYS: dict[str, str] = {
+    "employee": "Employee",
+    "founder":  "Founder",
+    "owner":    "Owner",
+    "member":   "Member",
+}
+
+
+def _ld_contact(blocks: list[dict]) -> dict | None:
+    """
+    Extract the first named contact from JSON-LD blocks.
+
+    Returns {'name': str, 'role': str, 'candidates': int} or None.
+    'candidates' is the total number of named entries found across all
+    matched keys — values > 1 indicate ambiguity (multiple people).
+    """
+    all_candidates: list[tuple[str, str]] = []
     for b in blocks:
         if not isinstance(b, dict):
             continue
-        for key in ("employee", "founder", "owner"):
+        for key, role_label in _LD_CONTACT_KEYS.items():
             val = b.get(key)
             if isinstance(val, dict) and val.get("name"):
-                return val["name"]
-            if isinstance(val, list) and val:
-                first = val[0]
-                if isinstance(first, dict) and first.get("name"):
-                    return first["name"]
+                all_candidates.append((val["name"], role_label))
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, dict) and item.get("name"):
+                        all_candidates.append((item["name"], role_label))
+    if not all_candidates:
+        return None
+    name, role = all_candidates[0]
+    return {"name": name, "role": role, "candidates": len(all_candidates)}
+
+
+# Role keywords searched in About/Team page text.
+_HTML_CONTACT_ROLES = re.compile(
+    r"\b(owner|founder|ceo|chief\s+executive|president)\b",
+    re.IGNORECASE,
+)
+# Matches "First Last" or "First Middle Last" (Title-cased words).
+_NAME_RE = re.compile(r"\b([A-Z][a-z]+(?: [A-Z][a-z]+)+)\b")
+
+
+def _html_contact(html: str) -> dict | None:
+    """
+    Extract a contact name and role from About/Team page HTML.
+
+    Strategy:
+      1. Find a heading or inline element containing a role keyword.
+      2. Extract a Title-cased name from the same element or next sibling.
+    Returns {'name': str, 'role': str} or None.
+    """
+    if not _BS4:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "p", "span"]):
+        text = tag.get_text(" ", strip=True)
+        role_m = _HTML_CONTACT_ROLES.search(text)
+        if not role_m:
+            continue
+        name_m = _NAME_RE.search(text)
+        if name_m and not _HTML_CONTACT_ROLES.fullmatch(name_m.group(1)):
+            return {"name": name_m.group(1), "role": role_m.group(0).title()}
+        sibling = tag.find_next_sibling()
+        if sibling:
+            sib_text = sibling.get_text(" ", strip=True)
+            name_m = _NAME_RE.search(sib_text)
+            if name_m:
+                return {"name": name_m.group(1), "role": role_m.group(0).title()}
     return None
 
 
@@ -252,25 +310,55 @@ def extract_business_details(domain: str) -> dict:
         result["address"] = address
         result["address_source"] = "json_ld"
 
-    # ── Contact name ─────────────────────────────────────────────────────────
-    name = _ld_contact_name(blocks)
-    if name:
-        result["contact_name"] = name
-        result["contact_name_source"] = "json_ld"
+    # ── Contact name + role (JSON-LD on homepage) ────────────────────────────
+    contact = _ld_contact(blocks)
+    if contact:
+        result["contact_name"]       = contact["name"]
+        result["contact_role"]       = contact["role"]
+        result["contact_source"]     = "json_ld"
+        result["_contact_candidates"] = contact["candidates"]
 
-    # ── Contact/about page fallback (phone only, up to 4 extra requests) ─────
-    if "phone" not in result:
-        contact_paths = ["/contact", "/contact-us", "/about", "/about-us"]
-        for path in contact_paths:
-            contact_html = _fetch(f"https://{domain}{path}")
-            if not contact_html:
-                continue
-            contact_blocks = _parse_json_ld(contact_html)
-            raw_ld = _ld_telephone(contact_blocks)
-            phone = _normalize_phone(raw_ld or "") or _html_telephone(contact_html, contact_page=True)
-            if phone:
-                result["phone"] = phone
-                result["phone_source"] = "scraped_contact_page"
+    # ── Contact/about page fallback ───────────────────────────────────────────
+    # Fetches up to 4 pages; each page is tried for phone (if missing) and
+    # for contact name (if missing), so extra requests are never wasted.
+    _FALLBACK_PATHS = ["/contact", "/contact-us", "/about", "/about-us"]
+    _ABOUT_ONLY     = {"/about", "/about-us"}   # also try HTML contact on these
+
+    need_phone   = "phone" not in result
+    need_contact = "contact_name" not in result
+
+    if need_phone or need_contact:
+        for path in _FALLBACK_PATHS:
+            if not need_phone and not need_contact:
                 break
+            page_html = _fetch(f"https://{domain}{path}")
+            if not page_html:
+                continue
+
+            if need_phone:
+                page_blocks = _parse_json_ld(page_html)
+                raw_ld  = _ld_telephone(page_blocks)
+                phone   = _normalize_phone(raw_ld or "") or _html_telephone(page_html, contact_page=True)
+                if phone:
+                    result["phone"]        = phone
+                    result["phone_source"] = "scraped_contact_page"
+                    need_phone = False
+
+            if need_contact and path in _ABOUT_ONLY:
+                page_blocks = _parse_json_ld(page_html)
+                contact = _ld_contact(page_blocks)
+                if contact:
+                    result["contact_name"]        = contact["name"]
+                    result["contact_role"]        = contact["role"]
+                    result["contact_source"]      = "about_page"
+                    result["_contact_candidates"] = contact["candidates"]
+                    need_contact = False
+                else:
+                    contact = _html_contact(page_html)
+                    if contact:
+                        result["contact_name"]   = contact["name"]
+                        result["contact_role"]   = contact.get("role")
+                        result["contact_source"] = "about_page"
+                        need_contact = False
 
     return result

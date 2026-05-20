@@ -80,16 +80,36 @@ def _get_owned_job(job_id: str, user_id: str) -> SearchJob:
 
 def _run_google_pipeline(job_id: str, request: LeadSearchRequest, user_id: str) -> None:
     """Run the Google Places pipeline and sync results into JOBS/RESULTS for polling."""
+    import time as _time
+    import traceback as _tb
+    _t0 = _time.monotonic()
+
+    def _ms() -> int:
+        return round((_time.monotonic() - _t0) * 1000)
+
     try:
-        print("[BG TASK] STARTED")
+        print(f"[BG TASK] STARTED job_id={job_id} query={request.keywords!r} location={request.location!r}")
+
+        # Stamp "running" immediately — prevents the job appearing stuck at "queued"
+        # for the entire pipeline duration while polls land every 1.5 s.
+        if job_id in JOBS:
+            JOBS[job_id] = JOBS[job_id].model_copy(
+                update={"status": "running", "updated_at": datetime.now(timezone.utc)}
+            )
+            print(f"[BG TASK] status → running job_id={job_id} elapsed_ms={_ms()}")
+
         run_pipeline(
             query=request.keywords or "",
             location=request.location or "",
             user_id=user_id,
             job_id=job_id,
         )
+        print(f"[BG TASK] run_pipeline returned job_id={job_id} elapsed_ms={_ms()}")
+
         # Sync persisted results into the in-memory cache so polling can read them.
         RESULTS[job_id] = _leads_from_rows(db_load_results(job_id))
+        print(f"[BG TASK] db_load_results job_id={job_id} count={len(RESULTS[job_id])} elapsed_ms={_ms()}")
+
         row = db_get_job(job_id, user_id)
         if row:
             JOBS[job_id] = _job_from_row(row)
@@ -99,9 +119,10 @@ def _run_google_pipeline(job_id: str, request: LeadSearchRequest, user_id: str) 
             "results_count": len(RESULTS[job_id]),
             "updated_at":    datetime.now(timezone.utc),
         })
-        print("[BG TASK] COMPLETED")
+        print(f"[BG TASK] COMPLETED job_id={job_id} leads={len(RESULTS[job_id])} total_ms={_ms()}")
     except Exception as exc:
-        print("[BG TASK ERROR]:", str(exc))
+        print(f"[BG TASK ERROR] job_id={job_id} elapsed_ms={_ms()} exc={exc!r}")
+        print(f"[BG TASK TRACEBACK]\n{_tb.format_exc()}")
         logger.error("Google pipeline failed for job %s: %s", job_id, exc)
         now = datetime.now(timezone.utc)
         if job_id in JOBS:
@@ -231,17 +252,27 @@ def get_job_results(
     `count` is always the total number of results, not the page size.
     Falls back to SQLite if the job or results are not in the in-memory cache.
     """
+    import time as _time
+    _t0 = _time.perf_counter()
+
     _get_owned_job(job_id, current_user["user_id"])  # 404 if not found or not owned
 
     if job_id not in RESULTS:
+        _db_t0 = _time.perf_counter()
         RESULTS[job_id] = _leads_from_rows(db_load_results(job_id))
+        _db_ms = round((_time.perf_counter() - _db_t0) * 1000)
+        print(f"[RESULTS_FETCH] job_id={job_id} cache=MISS db_read_ms={_db_ms} count={len(RESULTS[job_id])}")
+    else:
+        print(f"[RESULTS_FETCH] job_id={job_id} cache=HIT count={len(RESULTS[job_id])}")
 
     all_results = RESULTS.get(job_id, [])
 
+    _sort_t0 = _time.perf_counter()
     sorted_results = sorted(
         all_results,
         key=lambda lead: (-(lead.score or 0.0), lead.full_name),
     )
+    _sort_ms = round((_time.perf_counter() - _sort_t0) * 1000)
 
     paged = sorted_results[offset : offset + limit]
 
@@ -250,6 +281,9 @@ def get_job_results(
 
     message = "Hi, are you open to a quick chat?"
     enriched_results = send_message_to_leads(paged, message)
+
+    _total_ms = round((_time.perf_counter() - _t0) * 1000)
+    print(f"[RESULTS_FETCH] job_id={job_id} sort_ms={_sort_ms} total_ms={_total_ms} returned={len(enriched_results)}")
 
     return {
         "job_id": job_id,

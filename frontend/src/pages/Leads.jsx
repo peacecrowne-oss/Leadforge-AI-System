@@ -12,6 +12,16 @@ const FACTOR_LABELS = {
   company_match:   'Company',
 }
 
+const _ROLE_ACRONYMS = new Set(['CEO', 'COO', 'CTO', 'CFO', 'CMO', 'VP', 'HR', 'MD'])
+const _EXECUTIVE_ROLES = new Set(['CEO', 'COO', 'CTO', 'CFO', 'CMO', 'President'])
+function canonicalRole(raw) {
+  if (!raw) return raw
+  return raw.replace(/[A-Za-z]+/g, word => {
+    const up = word.toUpperCase()
+    return _ROLE_ACRONYMS.has(up) ? up : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+  })
+}
+
 export default function Leads() {
   const [form, setForm] = useState({ keywords: '', location: '', company: '', limit: '5' })
   const [phase, setPhase] = useState('idle')   // idle | searching | polling | done | error
@@ -25,14 +35,21 @@ export default function Leads() {
   const [sortOrder, setSortOrder] = useState('desc')     // 'desc' | 'asc'
   const [minScore, setMinScore] = useState(0)
   const [clientKeyword, setClientKeyword] = useState('')
+  const [roleFilter, setRoleFilter] = useState('Any')
+  const [identityFilter, setIdentityFilter] = useState('Any')
   const [showLatestOnly, setShowLatestOnly] = useState(false)
   const [nlQuery, setNlQuery] = useState('')
   const [nlParsed, setNlParsed] = useState(null)
   const [jobs, setJobs] = useState([])   // recent job history (persisted in localStorage)
   const [showImports, setShowImports] = useState(true)
-  const intervalRef = useRef(null)
-  const jobIdRef    = useRef(null)
-  const phaseRef    = useRef('idle')
+  const intervalRef     = useRef(null)
+  const jobIdRef        = useRef(null)
+  const phaseRef        = useRef('idle')
+  const searchStartRef  = useRef(null)   // performance.now() at search submit
+  const renderCountRef  = useRef(0)      // increments on every render
+
+  renderCountRef.current += 1
+  console.log('[TIMING] render #' + renderCountRef.current + ' phase=' + phaseRef.current + ' t=' + performance.now().toFixed(1) + 'ms')
 
   useEffect(() => {
     jobIdRef.current = jobId
@@ -58,6 +75,16 @@ export default function Leads() {
       (l.company    || '').toLowerCase().includes(kw)
     )
     .filter(l => (l.score ?? 0) >= minScore)
+    .filter(l => {
+      if (roleFilter === 'Any') return true
+      const r = canonicalRole(l.contact_role) || ''
+      if (roleFilter === 'Executive') return _EXECUTIVE_ROLES.has(r) || r.includes('Executive')
+      return r.includes(roleFilter)
+    })
+    .filter(l => {
+      if (identityFilter === 'Any') return true
+      return (l.identity_type || 'unknown') === identityFilter
+    })
     .sort((a, b) =>
       sortOrder === 'desc'
         ? (b.score ?? 0) - (a.score ?? 0)
@@ -112,8 +139,26 @@ export default function Leads() {
         const idle = phaseRef.current === 'idle' || phaseRef.current === 'done' || phaseRef.current === 'error'
         const jobChanged  = data.job_id !== lastSeenJobId.current
         const nowComplete = data.status === 'complete' && lastSeenStatus.current !== 'complete'
+        const sameJob     = data.job_id === jobIdRef.current
 
-        if (idle && (jobChanged || nowComplete)) {
+        console.log(
+          '[LATEST_POLL] tick | job_id:', data.job_id,
+          '| status:', data.status,
+          '| lastSeenJobId:', lastSeenJobId.current,
+          '| lastSeenStatus:', lastSeenStatus.current,
+          '| phaseRef:', phaseRef.current,
+          '| jobIdRef:', jobIdRef.current,
+        )
+        console.log(
+          '[LATEST_POLL] decision | idle:', idle,
+          '| jobChanged:', jobChanged,
+          '| nowComplete:', nowComplete,
+          '| sameJob:', sameJob,
+          '| willLoadJob:', idle && (jobChanged || nowComplete) && !sameJob,
+        )
+
+        if (idle && (jobChanged || nowComplete) && data.job_id !== jobIdRef.current) {
+          console.log('[LATEST_POLL] → calling handleLoadJob for job_id:', data.job_id)
           handleLoadJob(data.job_id)
         }
 
@@ -160,6 +205,9 @@ export default function Leads() {
 
   async function handleSearch(e) {
     e.preventDefault()
+    searchStartRef.current = performance.now()
+    console.log('[TIMING] handleSearch enter t=0ms')
+    console.log('[SEARCH] enter — jobIdRef:', jobIdRef.current, '| phaseRef:', phaseRef.current)
     console.log('[SEARCH TRIGGERED]', form)
     clearInterval(intervalRef.current)
     setPhase('searching')
@@ -201,17 +249,25 @@ export default function Leads() {
   }
 
   async function handleLoadJob(jid) {
+    console.log('[LOAD_JOB] enter — jid:', jid, '| jobIdRef:', jobIdRef.current, '| phaseRef:', phaseRef.current)
     clearInterval(intervalRef.current)
     setPhase('searching')
     setError(null)
+    console.log('[LOAD_JOB] setLeads([]) ← clearing leads before fetch')
     setLeads([])
     try {
       const res = await apiGet(`/leads/jobs/${jid}/results`)
       const results = res.results || []
+      console.log('[LOAD_JOB] results fetched — count:', results.length, '| raw res.results:', res.results, '| jid:', jid)
+      const _pmap2 = {}
+      results.forEach(l => { if (l.phone) _pmap2[l.phone] = (_pmap2[l.phone] || 0) + 1 })
+      const _rep2 = Object.entries(_pmap2).filter(([, c]) => c > 1).sort((a, b) => b[1] - a[1])
+      console.log('[PHONE_DIAG] repeated_phone_count=' + _rep2.length + ' top=' + JSON.stringify(_rep2.slice(0, 5)))
+      console.log('[LOAD_JOB] setLeads — count:', results.length)
       setLeads(results)
       setJobId(jid)
       setPhase('done')
-      // Persist to Recent Imports sidebar (same format as the manual search useEffect).
+      // Persist to Recent Searches sidebar (same format as the manual search useEffect).
       setJobs(prev => {
         if (prev.find(j => j.job_id === jid)) return prev
         const entry = {
@@ -224,6 +280,7 @@ export default function Leads() {
         return updated
       })
     } catch (err) {
+      console.log('[LOAD_JOB] fetch error:', err.message, '| jid:', jid)
       setError(err.message)
       setPhase('error')
     }
@@ -268,14 +325,32 @@ export default function Leads() {
   }
 
   function startPoll(jid) {
-    console.log('[Leads] polling job_id:', jid)
+    const _elapsed = () => searchStartRef.current != null
+      ? (performance.now() - searchStartRef.current).toFixed(1) + 'ms'
+      : 'n/a'
+    console.log('[TIMING] poll start elapsed=' + _elapsed())
+    console.log('[POLL] startPoll — jid:', jid, '| phaseRef:', phaseRef.current, '| jobIdRef:', jobIdRef.current)
     intervalRef.current = setInterval(async () => {
       try {
+        console.log('[TIMING] poll tick elapsed=' + _elapsed())
+        console.log('[POLL] tick — jid:', jid, '| phaseRef:', phaseRef.current, '| jobIdRef:', jobIdRef.current)
         const job = await apiGet(`/leads/jobs/${jid}`)
+        console.log('[POLL] GET /leads/jobs/:id — status:', job.status, '| job_id:', job.job_id)
         if (job.status === 'complete') {
           clearInterval(intervalRef.current)
+          console.log('[POLL] complete — fetching results for jid:', jid)
           const res = await apiGet(`/leads/jobs/${jid}/results`)
-          setLeads(res.results || [])
+          const results = res.results || []
+          console.log('[TIMING] results received count=' + results.length + ' elapsed=' + _elapsed())
+          const _pmap = {}
+          results.forEach(l => { if (l.phone) _pmap[l.phone] = (_pmap[l.phone] || 0) + 1 })
+          const _rep = Object.entries(_pmap).filter(([, c]) => c > 1).sort((a, b) => b[1] - a[1])
+          console.log('[PHONE_DIAG] repeated_phone_count=' + _rep.length + ' top=' + JSON.stringify(_rep.slice(0, 5)))
+          console.log('[POLL] GET /leads/jobs/:id/results — count:', results.length, '| raw res.results:', res.results)
+          console.log('[POLL] setLeads — count:', results.length)
+          setLeads(results)
+          console.log('[TIMING] setLeads count=' + results.length + ' elapsed=' + _elapsed())
+          console.log('[POLL] setPhase(done)')
           setPhase('done')
         } else if (job.status === 'failed') {
           clearInterval(intervalRef.current)
@@ -283,6 +358,7 @@ export default function Leads() {
           setPhase('error')
         }
       } catch (err) {
+        console.log('[POLL] error:', err.message)
         clearInterval(intervalRef.current)
         setError(err.message)
         setPhase('error')
@@ -453,6 +529,25 @@ export default function Leads() {
                 <option value={0.7}>≥ 0.70</option>
               </select>
             </label>
+            <label style={ctrlLabel}>
+              Role:
+              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={ctrlSelect}>
+                <option value="Any">Any</option>
+                <option value="Owner">Owner</option>
+                <option value="Founder">Founder</option>
+                <option value="CEO">CEO</option>
+                <option value="Executive">Executive</option>
+              </select>
+            </label>
+            <label style={ctrlLabel}>
+              Identity:
+              <select value={identityFilter} onChange={e => setIdentityFilter(e.target.value)} style={ctrlSelect}>
+                <option value="Any">Any</option>
+                <option value="person">Person</option>
+                <option value="business">Business</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </label>
             <span style={{ fontSize: '0.82rem', color: '#888', marginLeft: 'auto' }}>
               {displayLeads.length} of {leads.length} lead{leads.length !== 1 ? 's' : ''}
             </span>
@@ -468,7 +563,7 @@ export default function Leads() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ background: '#f0f0f0' }}>
-                    {['Name', 'Title', 'Company', 'Email', 'Location', 'Score', 'Confidence', 'Reason', 'Domain', 'Variant', 'Status', 'Action'].map(h => (
+                    {['Name', 'Title', 'Company', 'Email', 'Phone', 'Address', 'Role', 'Location', 'Score', 'Confidence', 'Reason', 'Domain', 'Variant', 'Status', 'Action'].map(h => (
                       <th key={h} style={th}>{h}</th>
                     ))}
                   </tr>
@@ -483,7 +578,16 @@ export default function Leads() {
                         <tr style={{ borderBottom: (expanded || threadExpanded[lead.id]) ? 'none' : '1px solid #eee' }}>
                           <td style={td}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              {lead.full_name || ''}
+                              {lead.contact_name || (lead.identity_type !== 'business' && lead.full_name) || '—'}
+                              {lead.contact_name && lead.contact_confidence && confBadgeStyle[lead.contact_confidence] && (
+                                <span style={{
+                                  fontSize: '0.65rem', fontWeight: 600, padding: '0.1rem 0.35rem',
+                                  borderRadius: 4, whiteSpace: 'nowrap',
+                                  ...confBadgeStyle[lead.contact_confidence],
+                                }}>
+                                  {lead.contact_confidence}
+                                </span>
+                              )}
                               {isTop && (
                                 <span style={{
                                   fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.4rem',
@@ -494,6 +598,11 @@ export default function Leads() {
                                 </span>
                               )}
                             </div>
+                            {lead.contact_name && lead.contact_source && (
+                              <div style={{ fontSize: '0.7rem', color: '#aaa', marginTop: '0.15rem' }}>
+                                {lead.contact_source}
+                              </div>
+                            )}
                             <div style={{ fontSize: '0.7rem', color: '#aaa', fontFamily: 'monospace', marginTop: '0.15rem' }}>
                               id: {lead.id}
                             </div>
@@ -501,6 +610,26 @@ export default function Leads() {
                           <td style={td}>{lead.title || '—'}</td>
                           <td style={td}>{lead.company || '—'}</td>
                           <td style={td}>{lead.email || '—'}</td>
+                          <td style={td}>
+                            {lead.phone
+                              ? <a href={`tel:${lead.phone}`} style={telLink}>{lead.phone}</a>
+                              : '—'
+                            }
+                            {lead.phone && lead.phone_provider && (
+                              <div style={{ fontSize: '0.7rem', color: '#aaa', marginTop: '0.15rem' }}>
+                                {lead.phone_provider}
+                              </div>
+                            )}
+                          </td>
+                          <td style={td}>
+                            {lead.address || '—'}
+                            {lead.address && lead.address_provider && (
+                              <div style={{ fontSize: '0.7rem', color: '#aaa', marginTop: '0.15rem' }}>
+                                {lead.address_provider}
+                              </div>
+                            )}
+                          </td>
+                          <td style={td}>{canonicalRole(lead.contact_role) || '—'}</td>
                           <td style={td}>{lead.location || '—'}</td>
                           <td style={td}>
                             <button
@@ -583,14 +712,14 @@ export default function Leads() {
                         </tr>
                         {expanded && (
                           <tr style={{ background: '#f9f9f9', borderBottom: threadExpanded[lead.id] ? 'none' : '1px solid #eee' }}>
-                            <td colSpan={13} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
+                            <td colSpan={15} style={{ padding: '0.4rem 0.75rem 0.65rem 0.75rem' }}>
                               <ScoreBreakdown explanation={lead.score_explanation} />
                             </td>
                           </tr>
                         )}
                         {threadExpanded[lead.id] && (
                           <tr style={{ background: '#fafafa', borderBottom: '1px solid #eee' }}>
-                            <td colSpan={13} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
+                            <td colSpan={15} style={{ padding: '0.6rem 0.75rem 0.75rem' }}>
                               <p style={{ margin: '0 0 0.5rem', fontSize: '0.78rem', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                                 Conversation
                               </p>
@@ -653,6 +782,12 @@ function Field({ label, value, onChange, type = 'text', ...rest }) {
 const card = { background: '#fff', padding: '1.25rem', borderRadius: 8, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }
 const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: '0.75rem' }
 const primaryBtn = { padding: '0.45rem 1.25rem', background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.95rem' }
+const telLink = { color: 'inherit', textDecoration: 'underline', textDecorationColor: '#bbb' }
+const confBadgeStyle = {
+  high:   { background: '#e8f5e9', color: '#2e7d32' },
+  medium: { background: '#fff8e1', color: '#e65100' },
+  low:    { background: '#f5f5f5', color: '#757575' },
+}
 const smallBtn = { padding: '0.25rem 0.6rem', cursor: 'pointer', border: '1px solid #ccc', borderRadius: 4, background: '#fff', fontSize: '0.85rem' }
 const scoreCellBtn = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600, fontSize: '0.9rem', color: '#1a1a2e', display: 'flex', alignItems: 'center' }
 const ctrlLabel = { fontSize: '0.85rem', color: '#555', display: 'flex', gap: '0.4rem', alignItems: 'center' }
